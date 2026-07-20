@@ -2,17 +2,22 @@
 
 `astrbot_plugin_market_watcher` 计划聚合 AstrBot 插件市场、发布 Issue 与 GitHub 仓库信号，识别新插件和重要变化，并向指定 AstrBot 会话推送可读摘要。
 
-当前版本为 **0.1.0 初始化版本**。它只提供可持续开发所需的插件生命周期、命令、配置、领域接口和文档，不会访问网络、采集市场数据或主动推送消息。
+当前版本为 **0.1.0**，项目处于 **MVP 规格/实现阶段**。现有代码仍是初始化骨架，不会访问网络、采集市场数据或主动推送消息；后续实现以 MVP PRD 和 FSD 为准，全部验收后才发布 `1.0.0`。
+
+规格文档：
+
+- [MVP 产品需求文档（PRD）](docs/PRD.md)
+- [MVP 功能规格文档（FSD）](docs/FSD.md)
 
 ---
 
 ## 目标功能
 
-- 发现新增、更新、移除或迁移的 AstrBot 插件。
+- 发现新增和实质更新的 AstrBot 插件。
 - 合并多个来源中的同一插件，避免重复提醒。
 - 获取并缓存 GitHub Star 数等补充指标。
 - 可选调用 AstrBot LLM Provider 生成中文变化摘要。
-- 按目标会话、批次和重要程度推送通知。
+- 按明确目标会话和稳定批次推送通知。
 
 ---
 
@@ -23,7 +28,7 @@
 - AstrBot 主仓 `plugin-publish` Issues：仅兼容历史与残留信号；官方发布指南已称该入口废弃。
 - GitHub 全局 `astrbot_plugin_*` 仓库发现：低频补充发现来源，默认关闭。
 
-详细规则见 [产品需求文档](docs/PRD.md)。
+详细范围与实现契约见 [产品需求文档](docs/PRD.md) 和 [功能规格文档](docs/FSD.md)。四类来源适配均属于 MVP，但市场/Collection 默认开启，主仓旧 Issues/GitHub 全局发现默认关闭。
 
 ---
 
@@ -93,7 +98,7 @@ https://github.com/233Official/astrbot_plugin_market_watcher
 
 1. 实现本地原子状态存储、标准化模型和确定性去重测试。
 2. 接入市场与 Collection 主要来源，建立首次运行基线。
-3. 增加变化检测、手动检查预览和受控推送。
+3. 增加变化检测、管理员手动检查和受控推送。
 4. 接入兼容 Issue、GitHub 全局发现、Star 缓存与限流保护。
 5. 增加可选 AI 摘要、可观测性和完整 AstrBot 集成测试。
 
