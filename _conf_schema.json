@@ -1,0 +1,78 @@
+{
+  "enabled": {
+    "description": "启用市场观察器",
+    "type": "bool",
+    "default": false,
+    "hint": "初始化版本默认关闭。启用后只启动可停止的占位轮询，不会执行网络请求。"
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔（分钟）",
+    "type": "int",
+    "default": 30,
+    "slider": { "min": 5, "max": 1440, "step": 5 },
+    "hint": "未来实现中各数据源检查的基础间隔。运行时最低按 1 分钟处理。"
+  },
+  "push_targets": {
+    "description": "推送目标会话",
+    "type": "list",
+    "default": [],
+    "hint": "填写 AstrBot unified message origin（UMO），例如 aiocqhttp:GroupMessage:123456789。留空时不主动推送。"
+  },
+  "github_token": {
+    "description": "GitHub Personal Access Token",
+    "type": "string",
+    "default": "",
+    "hint": "可选，仅用于提高 GitHub API 限额。请使用最小权限 Fine-grained Token；当前 AstrBot 插件配置 schema 未提供通用 password 输入类型，请限制配置文件权限且勿在日志中输出。"
+  },
+  "llm_provider_id": {
+    "description": "AI 摘要模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "未来用于生成变化摘要；留空时禁用 AI 摘要或使用实现阶段定义的安全降级策略。"
+  },
+  "source_market_api": {
+    "description": "启用市场 API/plugins.json 数据源",
+    "type": "bool",
+    "default": true
+  },
+  "source_collection_issues": {
+    "description": "启用 AstrBot 插件 Collection Issues 数据源",
+    "type": "bool",
+    "default": true
+  },
+  "source_plugin_publish_issues": {
+    "description": "启用 AstrBot 主仓 plugin-publish Issues 兼容数据源",
+    "type": "bool",
+    "default": false,
+    "hint": "官方发布指南已称该入口废弃，仅用于历史和残留信号兼容。"
+  },
+  "source_github_discovery": {
+    "description": "启用 GitHub astrbot_plugin_* 全局发现",
+    "type": "bool",
+    "default": false,
+    "hint": "全局搜索成本和误报率较高，未来实现时将使用独立频率、缓存与配额保护。"
+  },
+  "include_star_count": {
+    "description": "采集 GitHub Star 数",
+    "type": "bool",
+    "default": true
+  },
+  "enable_ai_summary": {
+    "description": "启用 AI 摘要",
+    "type": "bool",
+    "default": false
+  },
+  "request_timeout_seconds": {
+    "description": "单次请求超时（秒）",
+    "type": "int",
+    "default": 15,
+    "slider": { "min": 5, "max": 60, "step": 5 }
+  },
+  "max_items_per_push": {
+    "description": "单次推送最大条目数",
+    "type": "int",
+    "default": 10,
+    "slider": { "min": 1, "max": 50, "step": 1 }
+  }
+}
