@@ -6,7 +6,7 @@ import asyncio
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -321,9 +321,9 @@ def _fresh(cache: GitHubRepoCache | None, now: str, token_mode: bool) -> bool:
     except ValueError:
         return False
     if fetched.tzinfo is None:
-        fetched = fetched.replace(tzinfo=UTC)
+        fetched = fetched.replace(tzinfo=timezone.utc)
     if current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
+        current = current.replace(tzinfo=timezone.utc)
     return current - fetched < (TOKEN_TTL if token_mode else ANONYMOUS_TTL)
 
 
@@ -365,7 +365,9 @@ def _safe_response_excerpt(body: bytes) -> str:
 def _epoch_to_iso(value: str) -> str | None:
     try:
         return (
-            datetime.fromtimestamp(int(value), UTC).isoformat().replace("+00:00", "Z")
+            datetime.fromtimestamp(int(value), timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
         )
     except (ValueError, OverflowError, OSError):
         return None

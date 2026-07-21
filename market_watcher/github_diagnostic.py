@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from .errors import classify_exception
 from .github import classify_github_response
@@ -88,7 +88,9 @@ def _epoch_to_iso(value: str | None) -> str | None:
         return None
     try:
         return (
-            datetime.fromtimestamp(int(value), UTC).isoformat().replace("+00:00", "Z")
+            datetime.fromtimestamp(int(value), timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
         )
     except (ValueError, OverflowError, OSError):
         return None

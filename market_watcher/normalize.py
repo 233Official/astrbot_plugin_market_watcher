@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -21,7 +21,7 @@ _GITHUB_URL = re.compile(
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def sanitize_text(value: Any, max_length: int = 4096) -> str | None:

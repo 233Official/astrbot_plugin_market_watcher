@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import unittest
@@ -26,6 +27,28 @@ def read_simple_yaml(path: Path) -> dict[str, str]:
 
 
 class StructureTests(unittest.TestCase):
+    def test_runtime_avoids_python_311_datetime_utc(self) -> None:
+        runtime_files = [ROOT / "main.py", *(ROOT / "market_watcher").rglob("*.py")]
+        offenders = []
+        for path in runtime_files:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "datetime":
+                    if any(alias.name == "UTC" for alias in node.names):
+                        offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_datetime_modules_import_on_supported_python(self) -> None:
+        for module_name in (
+            "market_watcher.normalize",
+            "market_watcher.outbox",
+            "market_watcher.http",
+            "market_watcher.github",
+            "market_watcher.github_diagnostic",
+        ):
+            with self.subTest(module=module_name):
+                importlib.import_module(module_name)
+
     def test_required_files_exist(self) -> None:
         required = {
             "metadata.yaml",

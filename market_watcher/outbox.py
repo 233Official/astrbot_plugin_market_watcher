@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from .models import (
@@ -171,7 +171,7 @@ def merge_targets(configured: object, subscriptions: object) -> tuple[list[str],
 def _retry_at(value: str, attempts: int) -> str:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
+        parsed = parsed.replace(tzinfo=timezone.utc)
     return (
         (parsed + timedelta(seconds=min(300, 2 ** max(0, attempts - 1))))
         .isoformat()

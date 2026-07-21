@@ -194,7 +194,7 @@ def _retry_delay(value: str | None, fallback: float) -> float:
         delay = float(value)
         return min(maximum, delay) if delay >= 0 else min(maximum, fallback)
     except ValueError:
-        from datetime import UTC, datetime
+        from datetime import datetime, timezone
         from email.utils import parsedate_to_datetime
 
         try:
@@ -202,8 +202,8 @@ def _retry_delay(value: str | None, fallback: float) -> float:
         except (TypeError, ValueError, OverflowError):
             return min(maximum, max(0, fallback))
         if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=UTC)
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
         return min(
             maximum,
-            max(0, (retry_at - datetime.now(UTC)).total_seconds()),
+            max(0, (retry_at - datetime.now(timezone.utc)).total_seconds()),
         )
