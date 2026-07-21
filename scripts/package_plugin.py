@@ -29,8 +29,8 @@ except ImportError as exc:  # pragma: no cover – PyYAML exists in AstrBot envs
     raise SystemExit("PyYAML is required to read metadata.yaml") from exc
 
 from release_common import (
-    FIXED_TIMESTAMP,
     FILE_MODE,
+    FIXED_TIMESTAMP,
     MAX_ZIP_BYTES,
     ROOT,
     verify_main_import_contract,

@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Protocol
 
 from .card_renderer import MAX_EVENTS_PER_CARD, build_card_payload
 from .models import (
@@ -23,13 +23,13 @@ MAX_TARGET_LENGTH = 512
 
 class Notifier(Protocol):
     async def prepare(self, batch: DeliveryBatch) -> bytes | None:
-        """Render the card for a batch. Stores result internally for subsequent send calls."""
+        """Render the card for a batch. Stores result for subsequent send calls."""
         ...
 
     async def send(self, target: str, message: str) -> tuple[bool, str | None]: ...
 
     def clear_prepared(self) -> None:
-        """Clear internally stored image bytes and delivery mode after a batch completes."""
+        """Clear stored image bytes and delivery mode after a batch completes."""
         ...
 
 

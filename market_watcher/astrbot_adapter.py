@@ -145,7 +145,7 @@ class AstrBotNotifier:
         # with image card enabled (even if the result was invalid). Drives
         # text_fallback vs text distinction in send().
         self._prepare_attempted: bool = False
-        # Exposes actual delivery mode after send() call: "image" / "text_fallback" / "text"
+        # Exposes actual delivery mode after send(): "image" / "text_fallback" / "text"
         self.last_delivery_mode: str | None = None
 
     def clear_prepared(self) -> None:

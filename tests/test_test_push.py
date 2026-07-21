@@ -110,7 +110,6 @@ class TestPushCommandTests(unittest.IsolatedAsyncioTestCase):
                 return True
 
         context = Context()
-        from market_watcher.card_renderer import build_card_payload
 
         test_config = {"enable_image_card": False}
         notifier = self.main.AstrBotNotifier(
@@ -190,7 +189,7 @@ class TestPushImageCardContractTests(unittest.TestCase):
             self.assertIn(field, source)
 
     def test_notifier_only_uses_plugin_callable_no_module_fallback(self) -> None:
-        """Notifier receives only the plugin html_render; no module fallback assigned."""
+        """Notifier gets only plugin html_render; no module fallback assigned."""
         source = inspect.getsource(self.main.MarketWatcherPlugin.initialize)
         self.assertIn("_plugin_renderer if _plugin_callable else None", source)
         self.assertNotIn(
@@ -222,7 +221,7 @@ class TestPushImageCardContractTests(unittest.TestCase):
         self.assertLess(diag_pos, if_pos)
 
     def test_test_push_card_payload_has_at_least_one_event(self) -> None:
-        """test-push image path builds payload with at least one synthetic ChangeEvent."""
+        """test-push image payload includes at least one synthetic ChangeEvent."""
         source = inspect.getsource(self.main.MarketWatcherPlugin.test_push)
         self.assertIn("ChangeEvent(", source)
         self.assertIn('event_id="test-push:discovered:1"', source)
@@ -231,7 +230,7 @@ class TestPushImageCardContractTests(unittest.TestCase):
         self.assertNotIn("build_card_payload([]", source)
 
     def test_test_push_uses_last_delivery_mode(self) -> None:
-        """test-push uses self._notifier.last_delivery_mode, not local hardcoded mode."""
+        """test-push uses notifier.last_delivery_mode, not local hardcoded mode."""
         source = inspect.getsource(self.main.MarketWatcherPlugin.test_push)
         self.assertIn("last_delivery_mode", source)
         image_assign = 'mode = "image"'

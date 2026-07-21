@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import tempfile
 import unittest
 from copy import deepcopy
-from pathlib import Path
 
 from market_watcher.astrbot_adapter import AstrBotNotifier, FakeNotifier
 from market_watcher.card_renderer import (
-    MAX_EVENTS_PER_CARD,
     build_card_payload,
 )
 from market_watcher.models import (
@@ -30,7 +27,6 @@ from market_watcher.outbox import (
     create_batches,
     deliver_pending,
 )
-from market_watcher.summary import render_summary
 
 NOW = "2026-07-21T12:00:00Z"
 LATER = "2026-07-21T13:00:00Z"
@@ -374,7 +370,7 @@ class PrepareSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.calls[0][1], "empty-bytes-text")
 
     async def test_image_send_via_prepare_succeeds(self) -> None:
-        """With prepare_result bytes, delivery succeeds (image path via FakeNotifier)."""
+        """With prepare_result bytes, delivery succeeds (FakeNotifier image path)."""
         payload = build_card_payload(
             [make_event()],
             intro="x",
@@ -622,7 +618,7 @@ class AstrBotNotifierTests(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------
 
     async def test_image_fail_text_success_mode_is_text_fallback(self) -> None:
-        """When image send fails but text succeeds, last_delivery_mode == 'text_fallback'."""
+        """Image fails + text succeeds → last_delivery_mode == 'text_fallback'."""
 
         class TestCtx:
             def __init__(self):
@@ -1442,7 +1438,7 @@ class PrepareDiagnosticTests(unittest.IsolatedAsyncioTestCase):
     # -- _prepare_attempted flag ----------------------------------------------
 
     async def test_prepare_attempted_true_when_renderer_called(self) -> None:
-        """_prepare_attempted is True when renderer was called (even for invalid result)."""
+        """_prepare_attempted True when renderer called (even for invalid result)."""
 
         async def fake_render(*a, **kw):
             return _TRUNCATED_JPEG

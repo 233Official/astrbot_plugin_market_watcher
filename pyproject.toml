@@ -19,6 +19,11 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# CARD_TEMPLATE Jinja lines exceed 88; they are inside a Python string literal
+# so line-length lint would require embedding # noqa inside the template output.
+"market_watcher/card_renderer.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

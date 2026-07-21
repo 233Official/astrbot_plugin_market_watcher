@@ -5,9 +5,10 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from collections.abc import Iterable
 from enum import Enum
 from html.parser import HTMLParser
-from typing import Any, Iterable
+from typing import Any
 
 from .models import ChangeEvent, ChangeKind, SourceKind
 
