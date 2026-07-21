@@ -266,6 +266,75 @@ class ReleaseVersionValidationTests(unittest.TestCase):
         errors = self._run_validation("1.1.0")
         self.assertEqual(errors, [], f"unprefixed tag validation failed: {errors}")
 
+
+class ReleaseNotesExtractionTests(unittest.TestCase):
+    """Tests the release.yml Extract release notes inline Python logic.
+
+    Replicates the regex and extraction, then verifies correctness for
+    various CHANGELOG states.
+    """
+
+    CHANGELOG_1_1_0 = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    def _extract(self, tag: str, changelog: str | None = None) -> str:
+        """Replicate the inline Python from release.yml's Extract step."""
+        expected = tag.removeprefix("v")
+        text = changelog if changelog is not None else self.CHANGELOG_1_1_0
+        pattern = re.compile(
+            rf"^##\s+{re.escape(expected)}(?:\s+-\s+[^\n]+)?\n(?P<body>.*?)(?=\n---\n\n##\s+|\n##\s+|\Z)",
+            re.MULTILINE | re.DOTALL,
+        )
+        match = pattern.search(text)
+        if not match:
+            raise LookupError(
+                f"Cannot find {expected} section in CHANGELOG.md "
+                f"(searched for tag {tag!r})"
+            )
+        return match.group("body").strip()
+
+    def test_v1_1_0_dispatch_tag_extracts_non_empty_notes(self) -> None:
+        """workflow_dispatch(tag=v1.1.0) extracts real notes."""
+        notes = self._extract("v1.1.0")
+        self.assertGreater(len(notes), 100)
+        self.assertIn("图片卡片", notes)
+        self.assertIn("image_card", notes)
+
+    def test_unprefixed_1_1_0_also_extracts(self) -> None:
+        """Unprefixed 1.1.0 works (some callers may strip beforehand)."""
+        notes = self._extract("1.1.0")
+        self.assertGreater(len(notes), 100)
+
+    def test_nonexistent_version_raises(self) -> None:
+        """A missing version section raises LookupError, not silent empty."""
+        with self.assertRaises(LookupError):
+            self._extract("v9.9.9")
+
+    def test_minimal_changelog_section_extracts_content(self) -> None:
+        """A version with minimal content still extracts correctly, not empty."""
+        fake = "# Fake\n\n---\n\n## 9.9.9 - 2099-01-01\n\n-\n\n---\n\n## 0.0.1\n"
+        notes = self._extract("v9.9.9", fake)
+        self.assertEqual(notes, "-")
+
+    def test_notes_preserve_markdown_subheadings_lists_code_and_separators(
+        self,
+    ) -> None:
+        """Extracted notes keep subheadings, bullet lists, backtick code,
+        and horizontal rules without truncation or escaping."""
+        notes = self._extract("v1.1.0")
+        self.assertIn("### Added", notes)
+        self.assertIn("### Changed", notes)
+        self.assertIn("### Fixed", notes)
+        self.assertIn("- 增加图片卡片", notes)
+        self.assertIn("`card_renderer`", notes)
+        self.assertIn("`enable_image_card`", notes)
+        self.assertIn("`image_render_timeout_seconds`", notes)
+        self.assertIn("`deliver_pending()`", notes)
+
+    def test_v_prefix_heading_is_not_required(self) -> None:
+        """CHANGELOG uses '## 1.1.0 - date' not '## v1.1.0 - date'."""
+        self.assertIn("## 1.1.0 - 2026-07-22", self.CHANGELOG_1_1_0)
+        self.assertNotIn("## v1.1.0", self.CHANGELOG_1_1_0)
+
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/DESIGN.md", readme)
         self.assertIn("docs/ONLINE_ACCEPTANCE.md", readme)

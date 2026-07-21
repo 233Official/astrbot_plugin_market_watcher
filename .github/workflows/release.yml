@@ -126,14 +126,19 @@ jobs:
           from pathlib import Path
 
           tag = os.environ["RELEASE_TAG"]
+          # CHANGELOG uses unprefixed version heading (## 1.1.0 - date)
+          expected = tag.removeprefix("v")
           changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
           pattern = re.compile(
-              rf"^##\s+{re.escape(tag)}(?:\s+-\s+[^\n]+)?\n(?P<body>.*?)(?=\n---\n\n##\s+|\n##\s+v|\Z)",
+              rf"^##\s+{re.escape(expected)}(?:\s+-\s+[^\n]+)?\n(?P<body>.*?)(?=\n---\n\n##\s+|\n##\s+|\Z)",
               re.MULTILINE | re.DOTALL,
           )
           match = pattern.search(changelog)
           if not match:
-              raise SystemExit(f"Cannot find {tag} section in CHANGELOG.md")
+              raise SystemExit(
+                  f"Cannot find {expected} section in CHANGELOG.md "
+                  f"(searched for tag {tag!r})"
+              )
 
           body = match.group("body").strip()
           Path("release-notes.md").write_text(body + "\n", encoding="utf-8")
