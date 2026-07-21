@@ -201,6 +201,71 @@ class StructureTests(unittest.TestCase):
         self.assertTrue((ROOT / ".vscode/launch.json").is_file())
         self.assertTrue((ROOT / ".github/workflows/release.yml").is_file())
 
+
+class ReleaseVersionValidationTests(unittest.TestCase):
+    """Simulates the release.yml Validate release version step for both
+    tag-push (github.ref_name=v1.1.0) and workflow_dispatch (inputs.tag=v1.1.0).
+    The validation must accept the v-prefixed tag and match it against
+    the unprefixed versions in metadata.yaml, main.py @register, and
+    pyproject.toml.
+    """
+
+    def _run_validation(self, tag: str) -> list[str]:
+        """Replicate the inline Python from release.yml's Validate step."""
+        import yaml
+
+        metadata = yaml.safe_load((ROOT / "metadata.yaml").read_text(encoding="utf-8"))
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        main_text = (ROOT / "main.py").read_text(encoding="utf-8")
+
+        metadata_version: object = metadata.get("version")
+        project_version: object = project["project"]["version"]
+        register_match = re.search(
+            r'@register\(.*?"[^"]+",\s*"[^"]+",\s*.*?,\s*"([^"]+)"\s*,?\s*\)',
+            main_text,
+            re.DOTALL,
+        )
+        main_version: str | None = register_match.group(1) if register_match else None
+
+        expected_version = tag.removeprefix("v")
+        errors: list[str] = []
+        if metadata_version != expected_version:
+            errors.append(
+                f"metadata.yaml version {metadata_version!r} != "
+                f"expected {expected_version!r}"
+            )
+        if main_version != expected_version:
+            errors.append(
+                f"main.py @register version {main_version!r} != "
+                f"expected {expected_version!r}"
+            )
+        if project_version != expected_version:
+            errors.append(
+                f"pyproject.toml version {project_version!r} != "
+                f"expected {expected_version!r}"
+            )
+        return errors
+
+    def test_tag_push_v1_1_0(self) -> None:
+        """Simulate tag push: RELEASE_TAG = github.ref_name = v1.1.0."""
+        errors = self._run_validation("v1.1.0")
+        self.assertEqual(errors, [], f"tag-push validation failed: {errors}")
+
+    def test_workflow_dispatch_v1_1_0(self) -> None:
+        """Simulate workflow_dispatch: RELEASE_TAG = inputs.tag = v1.1.0."""
+        errors = self._run_validation("v1.1.0")
+        self.assertEqual(errors, [], f"dispatch validation failed: {errors}")
+
+    def test_invalid_tag_is_rejected(self) -> None:
+        """A mismatched tag must produce errors."""
+        errors = self._run_validation("v9.9.9")
+        self.assertGreater(len(errors), 0)
+
+    def test_unprefixed_tag_is_also_accepted(self) -> None:
+        """An unprefixed tag works if versions match."""
+        errors = self._run_validation("1.1.0")
+        self.assertEqual(errors, [], f"unprefixed tag validation failed: {errors}")
+
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/DESIGN.md", readme)
         self.assertIn("docs/ONLINE_ACCEPTANCE.md", readme)

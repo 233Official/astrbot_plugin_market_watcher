@@ -70,15 +70,20 @@ jobs:
           )
           main_version = register_match.group(1) if register_match else None
 
+          # Git tag uses v prefix (v1.1.0); metadata/main/pyproject do not (1.1.0)
+          expected_version = tag.removeprefix("v")
           errors = []
-          if metadata_version != tag:
-              errors.append(f"metadata.yaml version {metadata_version!r} != tag {tag!r}")
-          if main_version != tag:
-              errors.append(f"main.py @register version {main_version!r} != tag {tag!r}")
-          expected_project = tag.removeprefix("v")
-          if project_version != expected_project:
+          if metadata_version != expected_version:
               errors.append(
-                  f"pyproject.toml version {project_version!r} != {expected_project!r}"
+                  f"metadata.yaml version {metadata_version!r} != expected {expected_version!r}"
+              )
+          if main_version != expected_version:
+              errors.append(
+                  f"main.py @register version {main_version!r} != expected {expected_version!r}"
+              )
+          if project_version != expected_version:
+              errors.append(
+                  f"pyproject.toml version {project_version!r} != expected {expected_version!r}"
               )
 
           if errors:
