@@ -9,7 +9,7 @@ from pathlib import Path
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI path
-    tomllib = importlib.import_module("tomli")
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +48,11 @@ class StructureTests(unittest.TestCase):
         ):
             with self.subTest(module=module_name):
                 importlib.import_module(module_name)
+
+    def test_scheduler_uses_python_310_asyncio_timeout_class(self) -> None:
+        source = (ROOT / "market_watcher/scheduler.py").read_text(encoding="utf-8")
+        self.assertIn("except asyncio.TimeoutError:", source)
+        self.assertNotIn("except TimeoutError:", source)
 
     def test_required_files_exist(self) -> None:
         required = {
@@ -136,6 +141,7 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(project["version"], "1.0.0")
         self.assertEqual(project["requires-python"], ">=3.10")
         self.assertEqual(project["dependencies"], runtime_dependencies)
+        self.assertNotIn("tomli", project["dependencies"])
         self.assertNotIn("astrbot", " ".join(project["dependencies"]).lower())
         self.assertEqual(pyproject["tool"]["ruff"]["target-version"], "py310")
         self.assertEqual(

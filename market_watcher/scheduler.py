@@ -94,5 +94,5 @@ class FixedDelayScheduler:
         try:
             await asyncio.wait_for(self.stop_event.wait(), timeout=max(0, delay))
             return True
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return False

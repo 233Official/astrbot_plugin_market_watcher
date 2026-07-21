@@ -5,6 +5,7 @@ import json
 import time
 import unittest
 from copy import deepcopy
+from unittest import mock
 
 from market_watcher.config import parse_runtime_config
 from market_watcher.detect import detect_changes
@@ -940,6 +941,18 @@ class ConfigSchedulerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.wait_for(sleeper.stop(), 0.1)
         self.assertEqual(sleeper.status.state, "stopped")
+
+    async def test_scheduler_catches_python_310_asyncio_timeout(self) -> None:
+        async def run():
+            return RunReport(status="success", started_at=NOW)
+
+        scheduler = FixedDelayScheduler(run, lambda: 1)
+        with mock.patch.object(
+            scheduler.stop_event,
+            "wait",
+            new=mock.AsyncMock(side_effect=asyncio.TimeoutError),
+        ):
+            self.assertFalse(await scheduler._wait(1))
 
 
 if __name__ == "__main__":

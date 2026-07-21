@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import re
 import subprocess
@@ -14,7 +13,7 @@ from pathlib import Path
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI path
-    tomllib = importlib.import_module("tomli")
+    import tomli as tomllib
 
 from release_common import (
     MAX_FILE_BYTES,
