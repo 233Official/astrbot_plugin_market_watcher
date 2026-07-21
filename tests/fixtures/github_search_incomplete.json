@@ -1,0 +1,15 @@
+{
+  "total_count": 1,
+  "incomplete_results": true,
+  "items": [
+    {
+      "id": 5,
+      "name": "astrbot_plugin_partial",
+      "html_url": "https://github.com/Example/AstrBot_Plugin_Partial",
+      "owner": {"login": "Example"},
+      "private": false,
+      "fork": false,
+      "archived": false
+    }
+  ]
+}

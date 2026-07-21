@@ -14,3 +14,4 @@ build/
 .env
 data/
 tmp/
+.slim/deepwork/

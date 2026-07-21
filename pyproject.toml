@@ -1,3 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrbot-plugin-market-watcher"
+version = "1.0.0"
+description = "聚合 AstrBot 插件市场与 GitHub 发布信号的监控、摘要和可靠推送插件。"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "233Official" }]
+dependencies = ["aiohttp>=3.9,<4"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88
@@ -8,3 +22,9 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["market_watcher*"]

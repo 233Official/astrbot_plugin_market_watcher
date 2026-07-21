@@ -1,16 +1,35 @@
-"""Reusable contracts and models for the future market watcher pipeline."""
+"""Market watcher domain, source, state, and M3 orchestration primitives."""
 
-from .contracts import ChangeDetector, Fetcher, StateStore, Summarizer, UpdatePusher
-from .models import ChangeEvent, ChangeKind, PluginRecord, SourceKind
+from .models import (
+    ChangeEvent,
+    ChangeKind,
+    DeliveryBatch,
+    EndpointSnapshot,
+    FetchResult,
+    GitHubRepoCache,
+    GitHubState,
+    PluginRecord,
+    RunReport,
+    SourceEvidence,
+    SourceKind,
+    SourceObservation,
+    SourceState,
+    WatcherState,
+)
 
 __all__ = [
-    "ChangeDetector",
+    "EndpointSnapshot",
     "ChangeEvent",
     "ChangeKind",
-    "Fetcher",
+    "DeliveryBatch",
+    "FetchResult",
+    "GitHubRepoCache",
+    "GitHubState",
     "PluginRecord",
+    "RunReport",
+    "SourceEvidence",
     "SourceKind",
-    "StateStore",
-    "Summarizer",
-    "UpdatePusher",
+    "SourceObservation",
+    "SourceState",
+    "WatcherState",
 ]

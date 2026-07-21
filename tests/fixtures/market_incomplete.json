@@ -1,0 +1,7 @@
+{
+  "valid": {
+    "repo": "https://github.com/example/astrbot_plugin_valid",
+    "display_name": "Valid"
+  },
+  "broken": "not-an-object"
+}

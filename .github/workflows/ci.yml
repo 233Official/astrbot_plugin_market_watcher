@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-validation:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install runtime and validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff "tomli>=2; python_version < '3.11'"
+          python -m pip install --no-deps -e .
+
+      - name: Ruff
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+
+      - name: Compile Python sources
+        run: python -m compileall -q main.py market_watcher tests scripts
+
+      - name: Unit tests and offline release verification
+        run: python scripts/verify_release.py
+
+      - name: Build and self-verify deterministic ZIP
+        run: python scripts/package_release.py

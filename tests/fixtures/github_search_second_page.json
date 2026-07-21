@@ -1,0 +1,17 @@
+{
+  "total_count": 101,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 101,
+      "name": "astrbot_plugin_last",
+      "full_name": "Example/astrbot_plugin_last",
+      "html_url": "https://github.com/Example/astrbot_plugin_last",
+      "owner": {"login": "Example"},
+      "private": false,
+      "fork": false,
+      "archived": false,
+      "mirror_url": null
+    }
+  ]
+}

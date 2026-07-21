@@ -1,1 +1,1 @@
-# 初始化骨架仅使用 Python 标准库与 AstrBot 提供的 API，无额外运行时依赖。
+aiohttp>=3.9,<4

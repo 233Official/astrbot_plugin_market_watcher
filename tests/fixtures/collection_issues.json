@@ -1,0 +1,21 @@
+[
+  {
+    "number": 101,
+    "title": "[Plugin] Demo Collection",
+    "body": "Plugin Info\n```json\n{\"name\": \"astrbot_plugin_collection\", \"display_name\": \"Collection Demo\", \"repo\": \"https://github.com/Example/AstrBot_Plugin_Collection.git\", \"author\": \"collection-author\", \"version\": \"0.2.0\", \"support_platforms\": [\"aiocqhttp\"]}\n```",
+    "state": "open",
+    "labels": [{"name": "submission"}],
+    "html_url": "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/issues/101",
+    "updated_at": "2026-07-20T01:00:00Z"
+  },
+  {
+    "number": 102,
+    "title": "A pull request",
+    "body": "https://github.com/Example/Should_Not_Appear",
+    "state": "open",
+    "labels": [],
+    "html_url": "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/pull/102",
+    "updated_at": "2026-07-20T01:00:00Z",
+    "pull_request": {"url": "https://api.github.com/example"}
+  }
+]

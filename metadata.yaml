@@ -1,7 +1,8 @@
 name: astrbot_plugin_market_watcher
 display_name: AstrBot 插件市场观察器
-desc: 聚合 AstrBot 插件市场与 GitHub 发布信号的监控、摘要和推送插件（初始化版本）。
-version: 0.1.0
+desc: 聚合 AstrBot 插件市场与 GitHub 发布信号的监控、摘要和可靠推送插件。
+version: 1.0.0
 author: 233Official
 repo: https://github.com/233Official/astrbot_plugin_market_watcher
 astrbot_version: ">=4.24.0,<5"
+support_platforms: [aiocqhttp, qq_official]

@@ -3,25 +3,26 @@
     "description": "启用市场观察器",
     "type": "bool",
     "default": false,
-    "hint": "初始化版本默认关闭。启用后只启动可停止的占位轮询，不会执行网络请求。"
+    "hint": "启用后启动 fixed-delay 自动调度；关闭时管理员仍可手动 check。"
   },
   "poll_interval_minutes": {
     "description": "轮询间隔（分钟）",
     "type": "int",
     "default": 30,
     "slider": { "min": 5, "max": 1440, "step": 5 },
-    "hint": "未来实现中各数据源检查的基础间隔。运行时最低按 1 分钟处理。"
+    "hint": "每轮自动检查完成后等待的间隔；范围 5 至 1440 分钟。"
   },
   "push_targets": {
     "description": "推送目标会话",
     "type": "list",
     "default": [],
-    "hint": "填写 AstrBot unified message origin（UMO），例如 aiocqhttp:GroupMessage:123456789。留空时不主动推送。"
+    "hint": "填写 AstrBot unified message origin（UMO）；第一段必须是 WebUI 中配置的适配器实例 ID，不是固定平台名。例如实例 ID 为 aiocqhttp 时群聊可为 aiocqhttp:GroupMessage:123456789，QQ 官方 WebSocket 实例 ID 为 qqws 时群聊可为 qqws:GROUP_MESSAGE:<group_openid>。推荐在目标群按当前唤醒方式执行 marketwatch subscribe 获取准确 UMO（默认 / 前缀时为 /marketwatch subscribe）；留空时不主动推送。"
   },
   "github_token": {
     "description": "GitHub Personal Access Token",
     "type": "string",
     "default": "",
+    "obvious_hint": true,
     "hint": "可选，仅用于提高 GitHub API 限额。请使用最小权限 Fine-grained Token；当前 AstrBot 插件配置 schema 未提供通用 password 输入类型，请限制配置文件权限且勿在日志中输出。"
   },
   "llm_provider_id": {
@@ -29,7 +30,7 @@
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "未来用于生成变化摘要；留空时禁用 AI 摘要或使用实现阶段定义的安全降级策略。"
+    "hint": "可选 AI 导语使用的 AstrBot Provider；留空时手动检查使用当前会话默认 Provider，自动检查使用首个有效推送目标的默认 Provider。"
   },
   "source_market_api": {
     "description": "启用市场 API/plugins.json 数据源",
@@ -51,7 +52,7 @@
     "description": "启用 GitHub astrbot_plugin_* 全局发现",
     "type": "bool",
     "default": false,
-    "hint": "全局搜索成本和误报率较高，未来实现时将使用独立频率、缓存与配额保护。"
+    "hint": "全局搜索成本和误报率较高，默认关闭并受共享 GitHub 请求预算保护。"
   },
   "include_star_count": {
     "description": "采集 GitHub Star 数",
@@ -61,7 +62,15 @@
   "enable_ai_summary": {
     "description": "启用 AI 摘要",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "仅生成事实列表前的一段简短导语；失败、超时或输出不合规时自动回退纯事实模板。"
+  },
+  "ai_timeout_seconds": {
+    "description": "AI Provider 超时（秒）",
+    "type": "int",
+    "default": 60,
+    "slider": { "min": 10, "max": 120, "step": 5 },
+    "hint": "仅限制可选 AI 导语与 test-ai 诊断的单次 Provider 调用；超时后自动取消并回退纯事实模板，不阻塞事实投递。"
   },
   "request_timeout_seconds": {
     "description": "单次请求超时（秒）",

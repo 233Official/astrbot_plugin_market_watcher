@@ -1,0 +1,44 @@
+{
+  "total_count": 4,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 1,
+      "name": "astrbot_plugin_good",
+      "html_url": "https://github.com/Example/AstrBot_Plugin_Good",
+      "owner": {"login": "Example"},
+      "description": "good",
+      "private": false,
+      "fork": false,
+      "archived": false,
+      "stargazers_count": 9,
+      "forks_count": 1,
+      "updated_at": "2026-07-20T02:00:00Z",
+      "default_branch": "main"
+    },
+    {
+      "id": 2,
+      "name": "astrbot_plugin_fork",
+      "html_url": "https://github.com/Example/AstrBot_Plugin_Fork",
+      "private": false,
+      "fork": true,
+      "archived": false
+    },
+    {
+      "id": 3,
+      "name": "astrbot_plugin_archived",
+      "html_url": "https://github.com/Example/AstrBot_Plugin_Archived",
+      "private": false,
+      "fork": false,
+      "archived": true
+    },
+    {
+      "id": 4,
+      "name": "unrelated_repo",
+      "html_url": "https://github.com/Example/Unrelated_Repo",
+      "private": false,
+      "fork": false,
+      "archived": false
+    }
+  ]
+}

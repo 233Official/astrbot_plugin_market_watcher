@@ -1,0 +1,25 @@
+{
+  "total_count": 2,
+  "incomplete_results": false,
+  "items": [
+    {
+      "name": "astrbot_plugin_no_id",
+      "full_name": "Example/astrbot_plugin_no_id",
+      "html_url": "https://github.com/Example/astrbot_plugin_no_id",
+      "owner": {"login": "Example"},
+      "private": false,
+      "fork": false,
+      "archived": false,
+      "mirror_url": null
+    },
+    {
+      "name": "astrbot_plugin_mirror",
+      "full_name": "Example/astrbot_plugin_mirror",
+      "html_url": "https://github.com/Example/astrbot_plugin_mirror",
+      "private": false,
+      "fork": false,
+      "archived": false,
+      "mirror_url": "https://mirror.invalid/repo"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "raw-demo": {
+    "repo": "https://github.com/Example/AstrBot_Plugin_Raw",
+    "name": "astrbot_plugin_raw",
+    "desc": "raw fallback",
+    "author": "raw-author"
+  }
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "number": 88,
+    "title": "[Plugin] Legacy Demo",
+    "body": "Repository: https://github.com/Example/AstrBot_Plugin_Legacy",
+    "state": "closed",
+    "labels": [{"name": "plugin-publish"}],
+    "html_url": "https://github.com/AstrBotDevs/AstrBot/issues/88",
+    "updated_at": "2025-01-01T00:00:00Z"
+  }
+]
