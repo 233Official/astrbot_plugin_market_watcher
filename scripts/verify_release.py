@@ -84,7 +84,10 @@ def main() -> int:
         errors.append("ai_timeout_seconds 必须为默认 60、范围 10 至 120、步长 5")
 
     for markdown in (
+        ROOT / "CONTRIBUTING.md",
         ROOT / "README.md",
+        ROOT / "docs/COMMANDS.md",
+        ROOT / "docs/CONFIGURATION.md",
         ROOT / "docs/DESIGN.md",
         ROOT / "docs/FSD.md",
         ROOT / "docs/ONLINE_ACCEPTANCE.md",
@@ -94,11 +97,18 @@ def main() -> int:
         errors.extend(_broken_links(markdown))
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_targets = {
+        target.split("#", 1)[0].removeprefix("./")
+        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", readme)
+    }
     for required_link in (
+        "CONTRIBUTING.md",
+        "docs/COMMANDS.md",
+        "docs/CONFIGURATION.md",
         "docs/DESIGN.md",
         "docs/ONLINE_ACCEPTANCE.md",
     ):
-        if f"]({required_link})" not in readme:
+        if required_link not in readme_targets:
             errors.append(f"README 缺少文档入口：{required_link}")
 
     for path in files:

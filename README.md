@@ -1,213 +1,156 @@
 # AstrBot 插件市场观察器
 
-`astrbot_plugin_market_watcher` 聚合 AstrBot 插件市场、发布 Issue 与 GitHub 仓库信号，识别新插件和重要变化，并向指定 AstrBot 会话推送可读摘要。
+为 AstrBot 聚合插件市场与 GitHub 发布信号，识别新插件和重要变化，并把中文摘要可靠推送到指定会话。
 
-当前正式版本为 **1.0.0**。MVP 已于 2026-07-21 在 AstrBot v4.26.6 与 QQ 官方 WebSocket 群聊完成发布前线上验收，覆盖生命周期、权限、订阅持久化、主动推送、默认来源、AI Provider 路由、GitHub 认证降级恢复和 pending outbox 跨完整重启投递。
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.0%2C%3C5-6f42c1)](https://github.com/AstrBotDevs/AstrBot)  [![Python](https://img.shields.io/badge/Python-%3E%3D3.10-3776ab)](https://www.python.org/)  [![License](https://img.shields.io/badge/license-AGPL--3.0-green)](./LICENSE)
 
-规格文档：
-
-- [MVP 产品需求文档（PRD）](docs/PRD.md)
-- [MVP 功能规格文档（FSD）](docs/FSD.md)
-- [1.0.0 最终设计文档](docs/DESIGN.md)
-- [2026-07-21 脱敏线上验收记录](docs/ONLINE_ACCEPTANCE.md)
-- [插件开发与发布 Playbook](docs/PLUGIN_DEVELOPMENT_PLAYBOOK.md)：记录包结构、离线验收、故障定位与真实 AstrBot 验收边界。
+当前支持市场 API / `plugins.json`、AstrBot 插件 Collection Issues，并可选补充旧发布 Issue、GitHub 全局发现、Star 数和 AI 导语。最快的使用路径是通过仓库地址安装，在目标群订阅，然后执行一次检查。遇到问题请提交 [GitHub Issue](https://github.com/233Official/astrbot_plugin_market_watcher/issues)。
 
 ---
 
-## 目标功能
+## 功能亮点
 
-- 发现新增和实质更新的 AstrBot 插件。
-- 合并多个来源中的同一插件，避免重复提醒。
-- 获取并缓存 GitHub Star 数等补充指标。
-- 可选调用 AstrBot LLM Provider 生成中文变化摘要。
-- 按明确目标会话和稳定批次推送通知。
-
----
-
-## 数据源
-
-- AstrBot 市场 API 或 `plugins.json`：主要事实来源。
-- AstrBot 插件 Collection Issues：主要发布入口和候选信号。
-- AstrBot 主仓 `plugin-publish` Issues：仅兼容历史与残留信号；官方发布指南已称该入口废弃。
-- GitHub 全局 `astrbot_plugin_*` 仓库发现：低频补充发现来源，默认关闭。
-
-详细范围与实现契约见 [产品需求文档](docs/PRD.md) 和 [功能规格文档](docs/FSD.md)。四类来源适配均属于 MVP，但市场/Collection 默认开启，主仓旧 Issues/GitHub 全局发现默认关闭。
+- 聚合多个来源并合并同一插件，减少重复通知。
+- 按来源建立静默基线，只报告后续新增或实质变化，不把历史记录一次性刷屏。
+- 支持手动检查与 fixed-delay 自动检查；自动调度默认关闭。
+- 使用持久化订阅和 outbox 投递，保留待重试与永久失败状态。
+- 可选采集 GitHub Star，并以共享预算、缓存和限流降级控制请求成本。
+- 可选调用 AstrBot LLM Provider 生成短导语；失败时自动回退到纯事实摘要。
 
 ---
 
-## 安装方式
+## 5 分钟快速开始
 
-在 AstrBot WebUI 的插件管理中使用仓库地址安装：
+### 1. 安装
+
+在 AstrBot WebUI 的插件管理中使用以下仓库地址安装：
 
 ```text
 https://github.com/233Official/astrbot_plugin_market_watcher
 ```
 
-也可以将仓库克隆到 AstrBot 的插件目录后重载插件。当前版本要求 AstrBot `>=4.24.0,<5`，Python `>=3.10`。
+也可将仓库克隆到 AstrBot 插件目录后重载插件。当前没有在本文档中声明 AstrBot 市场安装渠道。要求 AstrBot `>=4.24.0,<5`、Python `>=3.10`。
 
-支持平台声明：
+### 2. 最小配置
 
-- `aiocqhttp`。
-- QQ 官方 WebSocket `qq_official`，已验证群聊命令与主动消息。
-- QQ 官方频道主动推送、C2C 主动消息和 `qq_official_webhook` 尚未验收，不属于 `1.0.0` 承诺范围。
+保持默认来源即可。若要自动检查，将 `enabled` 设为 `true`；首次体验可继续保持 `false`，使用管理员手动检查。`github_token`、`llm_provider_id` 均可留空。
 
----
+### 3. 首次使用
 
-## 命令
+命令注册名不含唤醒词；以下使用默认 `/` 前缀。若前缀为 `!`，可发送 `!marketwatch status`；若 `wake_prefix=[]`，群聊通常需要先 `@机器人` 再发送命令。
 
-插件命令注册名不含唤醒词，AstrBot 会在命令 filter 前按当前 `wake_prefix` 统一处理。下列 `/marketwatch ...` 仅是默认 `/` 前缀示例；若配置 `!` 前缀，可发送 `!marketwatch status`。当 `wake_prefix=[]` 时，群聊通常按 AstrBot 当前规则 @机器人后发送 `marketwatch status`，不要配置会匹配所有消息的空字符串前缀。
-
-- `/marketwatch status`：只读取本地状态，显示状态健康、插件记录、待投递目标、永久失败目标和最后运行报告。
-- `/marketwatch check`：仅管理员可用，执行四来源正常检查、基线/变化检测及配置目标推送，并返回中文运行摘要。
-- `/marketwatch test-push`：仅管理员在群聊中使用，向当前会话直接发送一条主动推送诊断消息；不检查来源，不修改订阅、outbox 或其他持久状态。
-- `/marketwatch test-ai`：仅管理员在群聊中使用，以固定虚构事实调用真实 AstrBot Provider；显式 Provider 优先，否则解析当前会话默认 Provider。诊断不受 `enable_ai_summary` 开关阻止，也不修改持久状态。
-- `/marketwatch test-github`：仅管理员在群聊中使用，独立请求 GitHub `/rate_limit`，验证匿名或 Token 认证及 primary rate limit headers；不消耗生产预算或修改状态。
-- `/marketwatch test-outbox-prepare`：仅管理员在群聊中使用，为当前会话幂等持久化一条带长期 hold 的诊断 pending；不会自动投递。
-- `/marketwatch test-outbox-status`：仅管理员在群聊中使用，只显示诊断 batch 总数及 pending/failed/sent/exhausted 计数。
-- `/marketwatch test-outbox-deliver`：仅管理员在群聊中使用，解除诊断 hold 并调用生产 outbox 投递链路；成功记录保留为 sent 证据。
-- `/marketwatch test-outbox-cleanup`：仅管理员在群聊中使用，幂等删除所有诊断 batch，不影响真实 `batch:` 项。
-- `/marketwatch subscribe`：仅群管理员在群聊中使用，将当前群官方 UMO 加入持久化订阅。
-- `/marketwatch unsubscribe`：仅群管理员在群聊中使用，幂等取消当前群订阅。
-- `/marketwatch subscriptions`：仅群管理员在群聊中使用，只显示订阅总数和当前群状态，不列出 UMO。
-
----
-
-## 配置
-
-核心配置位于 `_conf_schema.json`：
-
-- `enabled`：fixed-delay 自动调度总开关；关闭时不影响管理员手动检查。
-- `poll_interval_minutes`：每轮自动检查完成后的等待时间，范围为 5 至 1440 分钟。
-- `push_targets`：WebUI 主动推送目标 UMO 列表；每轮与群管理员命令创建的持久化订阅合并、验证、去重和排序。
-- `github_token`：可选 GitHub Token，默认空。
-- `include_star_count`：是否请求、缓存并在事件摘要中显示 GitHub Star。
-- `enable_ai_summary`：可选 AI 导语总开关，默认关闭。
-- `llm_provider_id`：AI 导语显式 Provider；为空时，手动检查解析当前会话默认 Provider，自动检查解析首个有效目标的默认 Provider。
-- `ai_timeout_seconds`：生产 AI 导语与 `test-ai` 共用的单次 Provider 超时，默认 60 秒、范围 10 至 120 秒；到期取消本次调用并回退事实模板，不重试。
-- `source_*`：各数据源开关；高成本或兼容来源默认关闭。
-
-启用自动调度后，初始化先等待 10 秒，再执行首轮检查；每轮完成后才开始计算下一次等待时间。自动与手动检查复用同一互斥锁，忙碌时自动轮次跳过且不排队。
-
----
-
-## 发布包安装
-
-1. 运行 `python scripts/package_release.py`，在 AstrBot WebUI 上传生成的 ZIP。
-2. 按需配置 GitHub Token、AI 开关和 Provider；也可留空 Provider 使用当前会话默认值。
-3. 群管理员在测试群按当前唤醒方式执行 `marketwatch subscribe`（默认示例为 `/marketwatch subscribe`）。
-4. 按相同唤醒方式执行 `marketwatch check`，再执行 `marketwatch status` 核对来源、预算、AI 与投递状态。
-
-每个来源首次成功采集只建立静默基线，不会把历史插件作为新增批量推送。
-
----
-
-## QQ 官方 WebSocket 验收
-
-- 在 AstrBot WebUI 配置 `qq_official` WebSocket adapter 时，配置的适配器 `id` 是 UMO 第一段；例如实例 ID 为 `qqws` 时，群 UMO 形如 `qqws:GROUP_MESSAGE:<group_openid>`。
-- 可先按当前唤醒方式执行 canonical 命令 `marketwatch test-push`，直接验证当前群主动消息链路。本次 `!` 前缀实例可发送 `!marketwatch test-push`；`!` 只是当前配置示例，不是插件固定要求。
-- AI 两阶段验收先将 `llm_provider_id` 留空并执行 `!marketwatch test-ai`，验证当前会话默认 Provider；再在 WebUI 选择显式 Provider、重载插件并重复执行。成功回复包含“真实 Provider 调用成功”和安全导语；失败回复包含脱敏错误类别及纯事实模板。`!` 同样只是本次实例示例。
-- 真实线上验收显示 10 秒和 30 秒均返回 `ai_timeout`，将超时调整为 60 秒后真实 Provider 调用成功，因此当前默认值为 60 秒。
-- 如能在不影响其他业务的情况下安全选择不可用 Provider，可额外验证降级；否则以离线异常、超时和不合规输出测试作为故障证据。
-- 推荐直接在 QQ 官方 WebSocket 测试群按当前唤醒方式执行 `marketwatch subscribe` 捕获 AstrBot 提供的准确 UMO，不建议手工猜测 `group_openid`。默认 `/` 前缀下即 `/marketwatch subscribe`，自定义前缀需相应替换。
-- 随后按相同唤醒方式执行 `marketwatch subscriptions` 确认当前群已订阅，并在可产生测试变化的受控条件下执行 `marketwatch check` 验证主动推送。
-- 重启或重载 AstrBot 后，再次执行 `marketwatch subscriptions` 和 `marketwatch check`，确认订阅持久化与主动推送仍正常。
-- 当前优先验收群聊。C2C 主动发送可后续单独验证；频道 cron 主动推送不在承诺范围，`qq_official_webhook` 尚未验收且不声明支持。
-
-### Pending outbox 跨重启验收
-
-以下均为 canonical 命令名，需按当前 AstrBot 唤醒方式发送，不要照抄固定前缀：
-
-1. 执行 `marketwatch test-outbox-prepare`。
-2. 执行 `marketwatch test-outbox-status`，确认 `count=1`、`pending=1`。
-3. **完整重启 AstrBot**，不是仅重载插件；重启后再次执行 status，确认仍为 `pending=1`。
-4. 执行 `marketwatch test-outbox-deliver`，确认群收到 Market Watcher 出站箱跨重启诊断消息。
-5. 再次执行 status，确认 `sent=1`、`pending=0`。
-6. 执行 `marketwatch test-outbox-cleanup`，最后执行 status，确认 `count=0`。
-
-prepare 使用长期 hold，必须显式 deliver 或 cleanup。deliver 与生产检查一致，除诊断项外也可能同时处理其他已经到期的真实 pending；prepare 会使普通 status 的总 pending 临时增加 1，cleanup 后恢复。
-
----
-
-## GitHub API 诊断验收
-
-- `marketwatch test-github` 只请求固定 `https://api.github.com/rate_limit`，输出认证模式、HTTP 状态、安全分类和 primary rate limit 的 Limit、Remaining、Reset；不会显示 Token、响应正文或 Authorization header。
-- 第一阶段清空 `github_token`，重载后按当前唤醒方式执行命令；本次 `!` 前缀实例示例为 `!marketwatch test-github`，预期认证模式为“匿名”。
-- 第二阶段仅在 WebUI 配置有效的最小权限 Fine-grained Token，重载后重复命令，预期认证模式为“已配置 Token”且分类为 `ok`。
-- 第三阶段可临时填写明显无效的占位 Token，重载后重复命令，预期 HTTP 401、分类 `auth_failed`、错误类别 `github_auth_failed`。测试完成后立即清空无效 Token，不要把真实 Token 写入聊天、日志、文档或仓库。
-- `/rate_limit` 成功只证明该认证与限流查询路径可用，不代表所有仓库、搜索或 Issue 端点权限。不得通过真实请求耗尽限额；429 和 403 限流分类使用离线模拟验证。
-
----
-
-## 安全说明
-
-- 仓库不包含任何凭据，`github_token` 默认值为空。
-- GitHub Token 应使用最小权限 Fine-grained Token，不得写入日志、Issue、截图或版本库。
-- 当前 AstrBot 插件配置 schema 未提供通用密码输入控件，WebUI 可能以普通字符串框展示 Token；请限制 AstrBot 配置文件权限，并只在确有配额需要时配置。
-- 推送目标默认空，插件不得在用户未配置目标时主动发送消息。
-- 群订阅只保存 AstrBot 提供的 `event.unified_msg_origin`，不解析群号；完整 UMO 不进入普通日志、status 或订阅列表输出。
-- GitHub Token 仅注入到 exact `https://api.github.com` 请求，不发送到市场 API、raw GitHub 或其他主机。
-- GitHub 请求共享每轮预算（有 Token 20、无 Token 5）和最大并发 2；仓库元数据 TTL 分别为 6 小时和 24 小时。
-- LLM 仅接收受限的公开规范化事实，不接收 Token、UMO、配置、raw excerpt 或完整响应；导语失败不会阻塞 outbox 和事实推送。
-
----
-
-## AstrBot v4.26.6 启停兼容
-
-- AstrBot v4.26.6 在插件停用后保留已绑定 handler，重新启用时再次执行 `functools.partial`，可能形成旧实例与新实例同时绑定，表现为命令触发 `TypeError` 或仍访问已终止实例。
-- 插件在 `initialize()` 最开始仅对自身精确模块名下、可证明安全的 handler binding 做规范化，使其只绑定当前实例一次；`terminate()` 不修改 AstrBot registry，也不触碰其他插件。
-- 若兼容层无法确认 handler root、参数或 keywords 安全，则保持不变。遇到未覆盖的启停故障时，应急方式是完整重载 AstrBot；仍未恢复时重新安装最新验收包。
-- 该兼容缺陷待上报；当最低支持的 AstrBot 版本已包含上游修复后，应删除此内部兼容层。
-
----
-
-## 1.0.0 状态
-
-已完成：
-
-- Star 插件注册、`initialize` / `terminate` 生命周期。
-- M1 稳定领域模型、GitHub URL 规范化与 schema v1 原子状态存储。
-- 市场 API/raw fallback、Collection Issues、主仓旧 Issues 和 GitHub Search 四来源适配器。
-- 可注入的 HTTP 边界、响应大小限制及无需安装 AstrBot、无需访问网络的 fixture 测试。
-- M2 跨来源优先级合并、按来源静默基线、新增/实质更新检测和确定性中文摘要。
-- 可靠 outbox、稳定事件/批次 ID、逐目标 at-least-once 重试及管理员手动检查推送。
-- M3 GitHub 仓库元数据/Star 严格缓存、ETag、预算、限流降级和 fixed-delay 自动调度。
-- M4 可选 AI 单段导语、安全 prompt/输出清洗、稳定 batch ID、阶段耗时与脱敏结构化日志。
-- 默认离线测试、可选真实 AstrBot 集成契约和只读发布验收脚本。
-
-- 2026-07-21 已完成安装/加载、两轮停用启用、重载、完整重启、卸载重装和非管理员权限验收。
-- 已验证自定义唤醒词、群订阅及持久化、主动推送、默认来源检查和 pending outbox 跨完整重启投递清理。
-- 已验证 LLM 默认/显式 Provider、10/30 秒超时降级与 60 秒成功。
-- 已验证 GitHub 匿名、有效 Token、401 降级与恢复。真实 403/429 配额耗尽未主动制造，使用离线模拟和响应 headers 验证分类与降级。
-- 完整脱敏结论见 [线上验收记录](docs/ONLINE_ACCEPTANCE.md)。
-
----
-
-## 发布后维护
-
-- 新功能、缺陷和技术债通过 GitHub Issues 跟踪，不继续扩张历史 PRD/FSD。
-- 涉及架构、不变量、平台边界、安全或隐私模型的变更同步更新 [设计文档](docs/DESIGN.md)。
-- 新增真实平台或宿主版本验收时同步更新 [线上验收记录](docs/ONLINE_ACCEPTANCE.md)。
-
----
-
-## 开发验证
-
-可执行以下离线验证：
-
-```bash
-python -m unittest discover -s tests -v
-python -m compileall -q main.py market_watcher tests
-python -m ruff check .
-python -m ruff format --check .
-git diff --check
-python scripts/verify_release.py
-python scripts/package_release.py
+```text
+/marketwatch subscribe
+/marketwatch test-push
+/marketwatch check
+/marketwatch status
 ```
 
-未安装 AstrBot 时，`tests/integration/` 会跳过。可通过安装 AstrBot，或在 `PYTHONPATH` 中提供真实 AstrBot 源码来运行集成契约；测试不硬编码相邻仓库路径。
+这些操作需要 AstrBot 管理员权限，且订阅与推送测试只能在群聊中使用。
+
+### 4. 可观察结果
+
+- `subscribe` 回复当前群已订阅。
+- `test-push` 在当前群产生一条主动推送测试消息。
+- 首次成功 `check` 为各来源建立静默基线，并返回中文运行摘要；没有历史插件批量推送是预期行为。
+- `status` 显示来源、调度器、目标、待投递项和最后运行报告。
 
 ---
 
-## 许可证
+## 支持矩阵
 
-本项目使用 [GNU Affero General Public License v3.0](LICENSE)。
+| 平台或场景 | 状态 | 范围 |
+| --- | --- | --- |
+| AstrBot v4.26.6 + `qq_official` WebSocket 群聊 | 已验证 | 命令、订阅持久化、主动推送、重启后 outbox 投递 |
+| `aiocqhttp` | 待验证 | metadata 已声明且有离线契约覆盖，本次未做真实平台回归 |
+| `qq_official` C2C 主动消息 | 待验证 | 不从群聊结果外推 |
+| QQ 官方频道 cron 主动推送 | 不支持 | 当前版本不作承诺 |
+| `qq_official_webhook` | 不支持 | 未验收，且未列入支持平台 |
+
+线上证据和边界见[线上验收记录](./docs/ONLINE_ACCEPTANCE.md)。其他 AstrBot 版本、adapter、账号类型或部署方式均不因单次成功而自动视为已验证。
+
+---
+
+## 高频命令
+
+| 场景 | 命令 | 权限 | 结果 |
+| --- | --- | --- | --- |
+| 查看状态 | `/marketwatch status` | 所有用户 | 返回本地状态与最后运行报告 |
+| 立即检查 | `/marketwatch check` | AstrBot 管理员 | 采集来源、检测变化并处理目标推送 |
+| 订阅当前群 | `/marketwatch subscribe` | AstrBot 管理员；仅群聊 | 持久化当前会话 UMO |
+| 取消当前群 | `/marketwatch unsubscribe` | AstrBot 管理员；仅群聊 | 幂等移除当前群订阅 |
+| 测试主动推送 | `/marketwatch test-push` | AstrBot 管理员；仅群聊 | 向当前会话发送诊断消息 |
+
+完整命令、限制和诊断用途见[命令参考](./docs/COMMANDS.md)。
+
+---
+
+## 高频配置
+
+| 配置键 | 默认值 | 用途与风险 |
+| --- | --- | --- |
+| `enabled` | `false` | 是否启动自动调度；关闭不影响手动 `check` |
+| `poll_interval_minutes` | `30` | 每轮完成后的等待分钟数，范围 `5`–`1440` |
+| `push_targets` | `[]` | WebUI 配置的 UMO；留空时仅使用群订阅目标 |
+| `github_token` | `""` | 可选敏感项，仅用于提高 GitHub API 限额 |
+| `include_star_count` | `true` | 开启时额外消耗 GitHub 请求预算；关闭可降低预算使用 |
+| `enable_ai_summary` | `false` | 仅增加短导语，失败不阻塞事实推送 |
+| `llm_provider_id` | `""` | 留空时按手动或自动检查场景解析默认 Provider |
+
+全部配置、边界、默认回退和来源开关见[配置参考](./docs/CONFIGURATION.md)。
+
+---
+
+## 数据源与默认行为
+
+- 默认启用市场 API / `plugins.json` 与 AstrBot 插件 Collection Issues。
+- AstrBot 主仓旧 `plugin-publish` Issues 已废弃，仅作兼容，默认关闭。
+- GitHub `astrbot_plugin_*` 全局发现成本与误报率较高，默认关闭。
+- 首次成功采集只建立静默基线；后续新增和实质更新才形成变化事件。
+- 配置目标与群订阅会合并、清理、去重并排序后用于推送。
+
+---
+
+## 安全与隐私
+
+- `github_token` 默认空；如需配置，请使用最小权限 Fine-grained Token，并限制 AstrBot 配置文件访问权限。
+- 不要在聊天、日志、截图、Issue 或版本库中提交 Token、完整 UMO、真实群号、用户标识或内部地址。
+- `push_targets` 默认空，插件不会在没有有效配置目标或群订阅时主动发送变化通知。
+- AI 只接收受限的公开规范化事实，不应接收 Token、UMO、原始响应或完整配置。
+- 提交 Issue 前请先脱敏；诊断命令只用于受控管理员测试。
+
+---
+
+## 文档索引
+
+- [完整命令参考](./docs/COMMANDS.md)
+- [完整配置参考](./docs/CONFIGURATION.md)
+- [设计与安全边界](./docs/DESIGN.md)
+- [脱敏线上验收记录](./docs/ONLINE_ACCEPTANCE.md)
+- [插件开发与发布 Playbook](./docs/PLUGIN_DEVELOPMENT_PLAYBOOK.md)
+- [贡献指南](./CONTRIBUTING.md)
+- [版本变更](./CHANGELOG.md)
+
+---
+
+## FAQ 与反馈
+
+### 为什么第一次检查没有推送历史插件？
+
+首次成功采集会建立静默基线；只有之后检测到的新增或实质变化才会通知。
+
+### 为什么自动检查没有运行？
+
+`enabled` 默认是 `false`。启用后插件采用 fixed-delay 调度；也可由管理员执行 `/marketwatch check`。
+
+### 命令为什么没有响应？
+
+确认使用当前 AstrBot 唤醒方式。插件注册的是 `marketwatch`，不是带固定 `/` 或 `!` 的命令名；多数命令还要求管理员权限或群聊环境。
+
+缺陷、使用问题和功能建议请提交 [GitHub Issues](https://github.com/233Official/astrbot_plugin_market_watcher/issues)，并附脱敏后的版本、平台、命令与错误类别。
+
+---
+
+## License
+
+本项目使用 [GNU Affero General Public License v3.0](./LICENSE)。

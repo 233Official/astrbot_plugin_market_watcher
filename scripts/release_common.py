@@ -16,12 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ZIP_BYTES = 16 * 1024 * 1024
 REQUIRED_FILES = {
+    "CONTRIBUTING.md",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
     "_conf_schema.json",
     "docs/FSD.md",
     "docs/DESIGN.md",
+    "docs/COMMANDS.md",
+    "docs/CONFIGURATION.md",
     "docs/ONLINE_ACCEPTANCE.md",
     "docs/PLUGIN_DEVELOPMENT_PLAYBOOK.md",
     "docs/PRD.md",
@@ -31,6 +34,7 @@ REQUIRED_FILES = {
     "requirements.txt",
 }
 PACKAGE_ROOT_FILES = {
+    "CONTRIBUTING.md",
     "metadata.yaml",
     "main.py",
     "_conf_schema.json",
@@ -40,6 +44,8 @@ PACKAGE_ROOT_FILES = {
     "CHANGELOG.md",
 }
 PACKAGE_DOC_FILES = {
+    "docs/COMMANDS.md",
+    "docs/CONFIGURATION.md",
     "docs/DESIGN.md",
     "docs/FSD.md",
     "docs/ONLINE_ACCEPTANCE.md",

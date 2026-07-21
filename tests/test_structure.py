@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -56,6 +58,7 @@ class StructureTests(unittest.TestCase):
 
     def test_required_files_exist(self) -> None:
         required = {
+            "CONTRIBUTING.md",
             "metadata.yaml",
             "main.py",
             "_conf_schema.json",
@@ -63,6 +66,8 @@ class StructureTests(unittest.TestCase):
             "README.md",
             ".github/workflows/ci.yml",
             "docs/PRD.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIGURATION.md",
             "docs/FSD.md",
             "docs/DESIGN.md",
             "docs/ONLINE_ACCEPTANCE.md",
@@ -75,6 +80,38 @@ class StructureTests(unittest.TestCase):
         }
         missing = sorted(path for path in required if not (ROOT / path).is_file())
         self.assertEqual(missing, [])
+
+    def test_release_package_contains_public_docs_and_readme_links(self) -> None:
+        scripts_dir = str(ROOT / "scripts")
+        sys.path.insert(0, scripts_dir)
+        try:
+            release_common = importlib.import_module("release_common")
+        finally:
+            sys.path.remove(scripts_dir)
+
+        packaged = {
+            path.relative_to(ROOT).as_posix()
+            for path in release_common.package_source_files()
+        }
+        public_docs = {
+            "CONTRIBUTING.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIGURATION.md",
+        }
+        self.assertTrue(public_docs.issubset(packaged))
+
+        link_sources = {"README.md", *public_docs}
+        missing_targets = []
+        for source in link_sources:
+            text = (ROOT / source).read_text(encoding="utf-8")
+            for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
+                clean = target.split("#", 1)[0]
+                if not clean or "://" in clean or clean.startswith("mailto:"):
+                    continue
+                resolved = (Path(source).parent / clean).as_posix()
+                if resolved.removeprefix("./") not in packaged:
+                    missing_targets.append(f"{source} -> {target}")
+        self.assertEqual(sorted(missing_targets), [])
 
     def test_metadata_contract(self) -> None:
         metadata = read_simple_yaml(ROOT / "metadata.yaml")
