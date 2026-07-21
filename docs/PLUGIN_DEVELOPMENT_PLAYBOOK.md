@@ -1,6 +1,6 @@
 # AstrBot 插件开发与发布 Playbook
 
-本文记录 `astrbot_plugin_market_watcher` 已验证的包结构、测试边界和发布检查。内容适用于当前 `1.1.0`；真实线上验收结论见 [ONLINE_ACCEPTANCE](ONLINE_ACCEPTANCE.md)。
+本文记录 `astrbot_plugin_market_watcher` 已验证的包结构、测试边界和发布检查。内容适用于当前 `1.1.1`；真实线上验收结论见 [ONLINE_ACCEPTANCE](ONLINE_ACCEPTANCE.md)。
 
 ---
 
@@ -26,7 +26,7 @@
 
 ## Metadata 与配置
 
-- `metadata.yaml`、`main.py` 注册版本和 `pyproject.toml` 当前均为 `1.1.0`，版本不使用 `v` 前缀；Git tag 使用 `v1.1.0`。
+- `metadata.yaml`、`main.py` 注册版本和 `pyproject.toml` 当前均为 `1.1.1`，版本不使用 `v` 前缀；Git tag 使用 `v1.1.1`。
 - 当前声明平台为 `aiocqhttp` 与 QQ 官方 WebSocket `qq_official`。`qq_official_webhook` 尚未验收，不在支持声明中。
 - `github_token` 默认值必须为空，并使用 `obvious_hint` 提醒这是敏感输入。Token 只用于提高 GitHub API 限额，不得进入日志、fixture、文档或发布包示例。
 - `llm_provider_id` 使用 AstrBot `_special: select_provider` 选择器。留空时，手动检查解析当前会话默认 Provider，自动检查解析首个有效推送目标的默认 Provider。

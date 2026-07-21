@@ -74,7 +74,7 @@ else:
     "astrbot_plugin_market_watcher",
     "233Official",
     "聚合 AstrBot 插件市场与 GitHub 发布信号的监控插件",
-    "1.1.0",
+    "1.1.1",
 )
 class MarketWatcherPlugin(Star):
     """M3 market checks with manual commands and fixed-delay scheduling."""

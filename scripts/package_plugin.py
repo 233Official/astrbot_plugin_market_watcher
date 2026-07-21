@@ -210,9 +210,15 @@ def build_archive(
         output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
     ) as archive:
         # AstrBot v4.24.2+ WebUI uses the first entry's top-level directory as
-        # the extraction root.  Write an explicit directory entry.
+        # the extraction root.  Write an explicit directory entry with fixed
+        # timestamp and Unix directory metadata so the archive is fully
+        # deterministic.
         if not flat:
-            archive.writestr(f"{plugin_name}/", "")
+            dir_info = zipfile.ZipInfo(f"{plugin_name}/", date_time=FIXED_TIMESTAMP)
+            dir_info.create_system = 3
+            dir_info.external_attr = (stat.S_IFDIR | 0o755) << 16
+            dir_info.compress_type = zipfile.ZIP_STORED
+            archive.writestr(dir_info, "")
 
         for relative in package_files:
             source = ROOT / relative

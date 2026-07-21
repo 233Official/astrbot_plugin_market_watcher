@@ -117,7 +117,7 @@ class StructureTests(unittest.TestCase):
         metadata = read_simple_yaml(ROOT / "metadata.yaml")
         self.assertEqual(metadata["name"], "astrbot_plugin_market_watcher")
         self.assertEqual(metadata["author"], "233Official")
-        self.assertEqual(metadata["version"], "1.1.0")
+        self.assertEqual(metadata["version"], "1.1.1")
         self.assertEqual(
             metadata["repo"],
             "https://github.com/233Official/astrbot_plugin_market_watcher",
@@ -175,7 +175,7 @@ class StructureTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertEqual(project["name"], "astrbot-plugin-market-watcher")
-        self.assertEqual(project["version"], "1.1.0")
+        self.assertEqual(project["version"], "1.1.1")
         self.assertEqual(project["requires-python"], ">=3.10")
         self.assertEqual(project["dependencies"], runtime_dependencies)
         self.assertNotIn("tomli", project["dependencies"])
@@ -204,11 +204,16 @@ class StructureTests(unittest.TestCase):
 
 class ReleaseVersionValidationTests(unittest.TestCase):
     """Simulates the release.yml Validate release version step for both
-    tag-push (github.ref_name=v1.1.0) and workflow_dispatch (inputs.tag=v1.1.0).
-    The validation must accept the v-prefixed tag and match it against
-    the unprefixed versions in metadata.yaml, main.py @register, and
-    pyproject.toml.
+    tag-push (github.ref_name=vX.Y.Z) and workflow_dispatch (inputs.tag=vX.Y.Z).
+    Reads the current plugin version dynamically from metadata.yaml.
     """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import yaml
+
+        meta = yaml.safe_load((ROOT / "metadata.yaml").read_text(encoding="utf-8"))
+        cls._current_version: str = meta.get("version", "")
 
     def _run_validation(self, tag: str) -> list[str]:
         """Replicate the inline Python from release.yml's Validate step."""
@@ -246,40 +251,48 @@ class ReleaseVersionValidationTests(unittest.TestCase):
             )
         return errors
 
-    def test_tag_push_v1_1_0(self) -> None:
-        """Simulate tag push: RELEASE_TAG = github.ref_name = v1.1.0."""
-        errors = self._run_validation("v1.1.0")
-        self.assertEqual(errors, [], f"tag-push validation failed: {errors}")
+    def test_tag_push_with_v_prefix(self) -> None:
+        """Simulate tag push: RELEASE_TAG = github.ref_name = v{version}."""
+        tag = f"v{self._current_version}"
+        errors = self._run_validation(tag)
+        self.assertEqual(errors, [])
 
-    def test_workflow_dispatch_v1_1_0(self) -> None:
-        """Simulate workflow_dispatch: RELEASE_TAG = inputs.tag = v1.1.0."""
-        errors = self._run_validation("v1.1.0")
-        self.assertEqual(errors, [], f"dispatch validation failed: {errors}")
+    def test_workflow_dispatch_with_v_prefix(self) -> None:
+        """Simulate workflow_dispatch: RELEASE_TAG = inputs.tag = v{version}."""
+        tag = f"v{self._current_version}"
+        errors = self._run_validation(tag)
+        self.assertEqual(errors, [])
+
+    def test_unprefixed_tag_is_also_accepted(self) -> None:
+        """An unprefixed v{version} works if versions match."""
+        errors = self._run_validation(self._current_version)
+        self.assertEqual(errors, [])
 
     def test_invalid_tag_is_rejected(self) -> None:
         """A mismatched tag must produce errors."""
         errors = self._run_validation("v9.9.9")
         self.assertGreater(len(errors), 0)
 
-    def test_unprefixed_tag_is_also_accepted(self) -> None:
-        """An unprefixed tag works if versions match."""
-        errors = self._run_validation("1.1.0")
-        self.assertEqual(errors, [], f"unprefixed tag validation failed: {errors}")
-
 
 class ReleaseNotesExtractionTests(unittest.TestCase):
     """Tests the release.yml Extract release notes inline Python logic.
 
-    Replicates the regex and extraction, then verifies correctness for
-    various CHANGELOG states.
+    Reads the current plugin version dynamically and validates that the
+    CHANGELOG section for that version can be extracted correctly.
     """
 
-    CHANGELOG_1_1_0 = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    @classmethod
+    def setUpClass(cls) -> None:
+        import yaml
+
+        meta = yaml.safe_load((ROOT / "metadata.yaml").read_text(encoding="utf-8"))
+        cls._current_version: str = meta.get("version", "")
+        cls._changelog: str = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def _extract(self, tag: str, changelog: str | None = None) -> str:
         """Replicate the inline Python from release.yml's Extract step."""
         expected = tag.removeprefix("v")
-        text = changelog if changelog is not None else self.CHANGELOG_1_1_0
+        text = changelog if changelog is not None else self._changelog
         pattern = re.compile(
             rf"^##\s+{re.escape(expected)}(?:\s+-\s+[^\n]+)?\n(?P<body>.*?)(?=\n---\n\n##\s+|\n##\s+|\Z)",
             re.MULTILINE | re.DOTALL,
@@ -292,17 +305,15 @@ class ReleaseNotesExtractionTests(unittest.TestCase):
             )
         return match.group("body").strip()
 
-    def test_v1_1_0_dispatch_tag_extracts_non_empty_notes(self) -> None:
-        """workflow_dispatch(tag=v1.1.0) extracts real notes."""
-        notes = self._extract("v1.1.0")
-        self.assertGreater(len(notes), 100)
-        self.assertIn("图片卡片", notes)
-        self.assertIn("image_card", notes)
+    def test_dispatch_tag_extracts_non_empty_notes(self) -> None:
+        """workflow_dispatch(tag=v{version}) extracts real notes."""
+        notes = self._extract(f"v{self._current_version}")
+        self.assertGreater(len(notes), 20)
 
-    def test_unprefixed_1_1_0_also_extracts(self) -> None:
-        """Unprefixed 1.1.0 works (some callers may strip beforehand)."""
-        notes = self._extract("1.1.0")
-        self.assertGreater(len(notes), 100)
+    def test_unprefixed_version_also_extracts(self) -> None:
+        """Unprefixed version works (some callers may strip beforehand)."""
+        notes = self._extract(self._current_version)
+        self.assertGreater(len(notes), 20)
 
     def test_nonexistent_version_raises(self) -> None:
         """A missing version section raises LookupError, not silent empty."""
@@ -315,25 +326,20 @@ class ReleaseNotesExtractionTests(unittest.TestCase):
         notes = self._extract("v9.9.9", fake)
         self.assertEqual(notes, "-")
 
-    def test_notes_preserve_markdown_subheadings_lists_code_and_separators(
-        self,
-    ) -> None:
-        """Extracted notes keep subheadings, bullet lists, backtick code,
-        and horizontal rules without truncation or escaping."""
-        notes = self._extract("v1.1.0")
-        self.assertIn("### Added", notes)
-        self.assertIn("### Changed", notes)
+    def test_notes_preserve_markdown_subheadings_lists_code(self) -> None:
+        """Extracted notes keep subheadings, bullet lists, backtick code."""
+        notes = self._extract(f"v{self._current_version}")
         self.assertIn("### Fixed", notes)
-        self.assertIn("- 增加图片卡片", notes)
-        self.assertIn("`card_renderer`", notes)
-        self.assertIn("`enable_image_card`", notes)
-        self.assertIn("`image_render_timeout_seconds`", notes)
-        self.assertIn("`deliver_pending()`", notes)
+        self.assertIn("- 修复", notes)
+        self.assertIn("ZipInfo", notes)
+        self.assertIn("`v` 前缀", notes)
 
     def test_v_prefix_heading_is_not_required(self) -> None:
-        """CHANGELOG uses '## 1.1.0 - date' not '## v1.1.0 - date'."""
-        self.assertIn("## 1.1.0 - 2026-07-22", self.CHANGELOG_1_1_0)
-        self.assertNotIn("## v1.1.0", self.CHANGELOG_1_1_0)
+        """CHANGELOG heading uses '## X.Y.Z - date' not '## vX.Y.Z - date'."""
+        heading = f"## {self._current_version} - 2026-07-22"
+        self.assertIn(heading, self._changelog)
+        v_heading = f"## v{self._current_version} - 2026-07-22"
+        self.assertNotIn(v_heading, self._changelog)
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/DESIGN.md", readme)

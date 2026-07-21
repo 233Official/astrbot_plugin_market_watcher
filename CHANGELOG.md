@@ -12,6 +12,16 @@
 
 ---
 
+## 1.1.1 - 2026-07-22
+
+### Fixed
+
+- 修复 Release Tag `v` 前缀版本校验：metadata/main.py/pyproject 三处版本源的 Git tag 比较统一使用 `tag.removeprefix("v")`。
+- 修复 Release notes 提取：CHANGELOG 使用 `## 1.1.1 - date` 而非 `## v1.1.1 - date`，提取正则匹配无前缀版本 heading。
+- 修复 ZIP 顶层目录 entry 非确定性：使用显式 `ZipInfo(date_time=FIXED_TIMESTAMP)` + Unix 目录 metadata，消除跨构建时间漂移，通过 Python 3.11 三间隔构建 raw SHA-256 回归验证。
+
+---
+
 ## 1.1.0 - 2026-07-22
 
 ### Added

@@ -122,12 +122,40 @@ class ArchiveDeterminismTests(unittest.TestCase):
             self.assertFalse(any(n.endswith("/") for n in names))
 
     def test_deterministic_timestamps(self) -> None:
+        """Sequential builds produce byte-identical archives."""
         with tempfile.TemporaryDirectory() as tmp:
             a1 = Path(tmp) / "a.zip"
             a2 = Path(tmp) / "b.zip"
             self._build_and_check(a1, flat=False)
             self._build_and_check(a2, flat=False)
             self.assertEqual(a1.read_bytes(), a2.read_bytes())
+
+    def test_directory_entry_has_fixed_timestamp_and_metadata(self) -> None:
+        """Top-level directory entry uses FIXED_TIMESTAMP and Unix dir mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "meta.zip"
+            self._build_and_check(archive, flat=False)
+            with zipfile.ZipFile(archive) as zf:
+                dir_name = f"{self.plugin_name}/"
+                self.assertIn(dir_name, zf.namelist())
+                info = zf.getinfo(dir_name)
+                self.assertEqual(info.date_time, (2020, 1, 1, 0, 0, 0))
+                mode = info.external_attr >> 16
+                self.assertTrue(stat.S_ISDIR(mode), f"not a directory: {mode:o}")
+                self.assertEqual(mode & 0o777, 0o755)
+                self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
+
+    def test_no_directory_entry_in_flat_mode(self) -> None:
+        """Flat archives must not contain a directory entry."""
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "flat.zip"
+            self._build_and_check(archive, flat=True)
+            with zipfile.ZipFile(archive) as zf:
+                for name in zf.namelist():
+                    self.assertFalse(
+                        name.endswith("/"),
+                        f"flat archive contains directory entry: {name}",
+                    )
 
     def test_no_symlinks_or_unsafe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
