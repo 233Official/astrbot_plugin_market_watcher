@@ -40,6 +40,10 @@ def format_status(
         f"{label}={'enabled' if kind in enabled_sources else 'disabled'}"
         for kind, label in source_flags.items()
     )
+    image_card = (
+        f"图片卡片：{'enabled' if runtime.enable_image_card else 'disabled'}"
+        f"（超时：{runtime.image_render_timeout_seconds}s）"
+    )
     return "\n".join(
         (
             "AstrBot 插件市场观察器",
@@ -61,6 +65,7 @@ def format_status(
             f"- 本轮有效目标数：{effective_target_count}",
             f"- GitHub 剩余/重置：{github_remaining}/{github_reset}",
             f"- GitHub 缓存：{github_cache_count}",
+            f"- {image_card}",
             f"- 待投递目标：{pending}",
             f"- 永久失败目标：{exhausted}",
             last_text,

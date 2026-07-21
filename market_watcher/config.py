@@ -19,6 +19,8 @@ class RuntimeConfig:
     include_star_count: bool
     request_timeout_seconds: int
     max_items_per_push: int
+    enable_image_card: bool
+    image_render_timeout_seconds: int
 
 
 def parse_runtime_config(config: Mapping[str, Any]) -> RuntimeConfig:
@@ -37,6 +39,10 @@ def parse_runtime_config(config: Mapping[str, Any]) -> RuntimeConfig:
             config.get("request_timeout_seconds"), 15, 5, 60
         ),
         max_items_per_push=_int_range(config.get("max_items_per_push"), 10, 1, 50),
+        enable_image_card=_bool(config.get("enable_image_card"), True),
+        image_render_timeout_seconds=_int_range(
+            config.get("image_render_timeout_seconds"), 8, 3, 20
+        ),
     )
 
 

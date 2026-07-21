@@ -325,6 +325,9 @@ class RecordingNotifier:
         self.calls.append((target, message))
         return True, None
 
+    def clear_prepared(self):
+        pass
+
 
 def observation(version: str) -> SourceObservation:
     return SourceObservation(
@@ -438,6 +441,9 @@ class AiOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             async def send(self, target, message):
                 sequence.append(("deliver", target))
                 return True, None
+
+            def clear_prepared(self):
+                pass
 
         wall_index = 0
 

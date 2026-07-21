@@ -16,6 +16,7 @@
 - 使用持久化订阅和 outbox 投递，保留待重试与永久失败状态。
 - 可选采集 GitHub Star，并以共享预算、缓存和限流降级控制请求成本。
 - 可选调用 AstrBot LLM Provider 生成短导语；失败时自动回退到纯事实摘要。
+- 可选图片卡片（T2I）投递：自动将变化摘要渲染为图片卡片，渲染超时或异常时自动降级纯文本。
 
 ---
 
@@ -51,7 +52,7 @@ https://github.com/233Official/astrbot_plugin_market_watcher
 ### 4. 可观察结果
 
 - `subscribe` 回复当前群已订阅。
-- `test-push` 在当前群产生一条主动推送测试消息。
+- `test-push` 在当前群产生一条主动推送测试消息；图片卡片启用时报告实际发送模式（`image` / `text_fallback` / `text`）。
 - 首次成功 `check` 为各来源建立静默基线，并返回中文运行摘要；没有历史插件批量推送是预期行为。
 - `status` 显示来源、调度器、目标、待投递项和最后运行报告。
 
@@ -96,6 +97,8 @@ https://github.com/233Official/astrbot_plugin_market_watcher
 | `include_star_count` | `true` | 开启时额外消耗 GitHub 请求预算；关闭可降低预算使用 |
 | `enable_ai_summary` | `false` | 仅增加短导语，失败不阻塞事实推送 |
 | `llm_provider_id` | `""` | 留空时按手动或自动检查场景解析默认 Provider |
+| `enable_image_card` | `true` | 开启后变化摘要优先渲染为图片卡片再推送；渲染失败自动降级纯文本 |
+| `image_render_timeout_seconds` | `8` | 单次图片渲染超时上限，范围 3–20 秒 |
 
 全部配置、边界、默认回退和来源开关见[配置参考](./docs/CONFIGURATION.md)。
 

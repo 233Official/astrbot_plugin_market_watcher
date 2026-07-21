@@ -108,6 +108,9 @@ class RecordingNotifier:
         self.calls.append((target, message))
         return True, None
 
+    def clear_prepared(self):
+        pass
+
 
 def market_observation(version: str) -> SourceObservation:
     return SourceObservation(

@@ -74,7 +74,7 @@ else:
     "astrbot_plugin_market_watcher",
     "233Official",
     "聚合 AstrBot 插件市场与 GitHub 发布信号的监控插件",
-    "1.0.0",
+    "1.1.0",
 )
 class MarketWatcherPlugin(Star):
     """M3 market checks with manual commands and fixed-delay scheduling."""
@@ -82,6 +82,8 @@ class MarketWatcherPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.config = config
+        # Process-safe instance marker for cross-method object identity observation
+        self._instance_marker: str = format(id(self), "x")
         self._http: HttpClient | None = None
         self._store: JsonStateStore | None = None
         self._notifier: AstrBotNotifier | None = None
@@ -123,7 +125,54 @@ class MarketWatcherPlugin(Star):
             ),
             SourceKind.GITHUB_DISCOVERY: GitHubSearchFetcher(self._http),
         }
-        self._notifier = AstrBotNotifier(self.context)
+        # Renderer diagnostic – observe, do not guess
+        _plugin_renderer = getattr(self, "html_render", None)
+        _plugin_callable = callable(_plugin_renderer)
+        _context_callable = callable(getattr(self.context, "html_render", None))
+        _api_callable = False
+        try:
+            from astrbot.api import html_renderer as _hr_mod
+
+            _api_callable = callable(_hr_mod.render_custom_template)
+        except Exception:
+            pass
+        _owner = "none"
+        for _cls in type(self).__mro__:
+            if "html_render" in _cls.__dict__:
+                _owner = f"{_cls.__module__}.{_cls.__qualname__}"
+                break
+
+        # Construct notifier with only the plugin callable (no module fallback)
+        self._notifier = AstrBotNotifier(
+            self.context,
+            html_render=_plugin_renderer if _plugin_callable else None,
+            image_render_timeout=runtime.image_render_timeout_seconds,
+        )
+        logger.info(
+            "[MarketWatcher] renderer diagnostic"
+            " instance_marker=%s"
+            " notifier_marker=%s"
+            " runtime_marker=%s"
+            " image_card=%s"
+            " plugin_callable=%s"
+            " context_callable=%s"
+            " api_callable=%s"
+            " owner=%s"
+            " plugin_type=%s"
+            " context_type=%s"
+            " notifier_callable=%s",
+            self._instance_marker,
+            format(id(self._notifier), "x"),
+            format(id(runtime), "x"),
+            runtime.enable_image_card,
+            _plugin_callable,
+            _context_callable,
+            _api_callable,
+            _owner,
+            type(self).__name__,
+            type(self.context).__name__,
+            callable(self._notifier.html_render),
+        )
         self._ai_client = AstrBotAiClient(
             self.context, timeout_seconds=runtime.ai_timeout_seconds
         )
@@ -276,6 +325,7 @@ class MarketWatcherPlugin(Star):
             enable_ai_summary=runtime.enable_ai_summary,
             llm_provider_id=runtime.llm_provider_id,
             provider_origin=event.unified_msg_origin,
+            enable_image_card=runtime.enable_image_card,
         )
         yield event.plain_result(report.to_chinese())
 
@@ -288,16 +338,116 @@ class MarketWatcherPlugin(Star):
         if self._notifier is None:
             yield event.plain_result("市场观察器尚未完成初始化。")
             return
-        try:
-            success, error_code = await self._notifier.send(
-                event.unified_msg_origin,
-                "【Market Watcher】主动推送测试：如果你看到此消息，"
-                "当前会话的主动消息链路可用。",
+        # Reset delivery mode so a stale value is never carried forward from
+        # a previous test-push when prepare/send does not set it.
+        self._notifier.last_delivery_mode = None
+        runtime = self._runtime()
+        # Instance diagnostic – observe object identity across methods
+        _cond = bool(runtime.enable_image_card and self._notifier.html_render)
+        _tgt_callable = callable(getattr(self, "html_render", None))
+        logger.info(
+            "[MarketWatcher] test-push diagnostic"
+            " instance_marker=%s"
+            " notifier_marker=%s"
+            " runtime_marker=%s"
+            " image_card=%s"
+            " plugin_callable=%s"
+            " notifier_callable=%s"
+            " condition=%s"
+            " notifier_present=%s"
+            " service_present=%s",
+            getattr(self, "_instance_marker", "none"),
+            format(id(self._notifier), "x"),
+            format(id(runtime), "x"),
+            bool(runtime.enable_image_card),
+            _tgt_callable,
+            callable(self._notifier.html_render),
+            _cond,
+            self._notifier is not None,
+            getattr(self, "_service", None) is not None,
+        )
+        # Real image-card prepare/send path
+        if runtime.enable_image_card and self._notifier.html_render:
+            from .market_watcher.card_renderer import (
+                build_card_payload,
             )
-        except Exception:
-            success, error_code = False, "delivery_exception"
+            from .market_watcher.models import (
+                ChangeEvent,
+                ChangeKind,
+                PluginRecord,
+                SourceEvidence,
+                SourceKind,
+            )
+
+            try:
+                # Build a minimal card payload with one synthetic discovered event
+                synthetic_event = ChangeEvent(
+                    event_id="test-push:discovered:1",
+                    kind=ChangeKind.DISCOVERED,
+                    canonical_id="github:owner/test-plugin",
+                    current=PluginRecord(
+                        canonical_id="github:owner/test-plugin",
+                        name="test-plugin",
+                        display_name="测试插件",
+                        description="Market Watcher 图片卡片链路诊断。",
+                        version="1.0.0",
+                        author="测试作者",
+                        stars=42,
+                        evidence=(
+                            SourceEvidence(
+                                SourceKind.MARKET,
+                                "test-plugin",
+                                "https://github.com/owner/test-plugin",
+                                self._service_clock(),
+                            ),
+                        ),
+                    ),
+                    previous=None,
+                    changed_fields=(),
+                    detected_at=self._service_clock(),
+                )
+                fake_payload = build_card_payload(
+                    [synthetic_event],
+                    intro="Market Watcher 主动推送测试 — 图片卡片链路诊断。",
+                    batch_index=1,
+                    batch_total=1,
+                    total_items=1,
+                )
+                from .market_watcher.models import DeliveryBatch
+
+                test_batch = DeliveryBatch(
+                    batch_id="test-push-card",
+                    event_ids=("test-push:discovered:1",),
+                    message=(
+                        "【Market Watcher】主动推送测试：如果你看到此消息，"
+                        "当前会话的主动消息链路可用。"
+                    ),
+                    created_at=self._service_clock(),
+                    targets={},
+                    card_payload=fake_payload,
+                )
+                await self._notifier.prepare(test_batch)
+                success, error_code = await self._notifier.send(
+                    event.unified_msg_origin, test_batch.message
+                )
+                mode = self._notifier.last_delivery_mode or "text_fallback"
+            except Exception:
+                success, error_code = False, "delivery_exception"
+                mode = "text_fallback"
+        else:
+            mode = "text"
+            try:
+                success, error_code = await self._notifier.send(
+                    event.unified_msg_origin,
+                    "【Market Watcher】主动推送测试：如果你看到此消息，"
+                    "当前会话的主动消息链路可用。",
+                )
+            except Exception:
+                success, error_code = False, "delivery_exception"
         if success:
-            yield event.plain_result("Market Watcher 主动推送测试已发送。")
+            yield event.plain_result(
+                f"Market Watcher 主动推送测试已发送（模式：{mode}）。"
+            )
             return
         safe_error = (
             error_code
@@ -306,7 +456,7 @@ class MarketWatcherPlugin(Star):
             else "delivery_failed"
         )
         yield event.plain_result(
-            f"Market Watcher 主动推送测试失败（错误类别：{safe_error}）。"
+            f"Market Watcher 主动推送测试失败（错误类别：{safe_error}，模式：{mode}）。"
         )
 
     @marketwatch.command("test-outbox-prepare")
@@ -534,6 +684,7 @@ class MarketWatcherPlugin(Star):
             include_star_count=runtime.include_star_count,
             enable_ai_summary=runtime.enable_ai_summary,
             llm_provider_id=runtime.llm_provider_id,
+            enable_image_card=runtime.enable_image_card,
         )
 
     def _runtime(self) -> RuntimeConfig:

@@ -39,6 +39,8 @@ REQUIRED_CONFIG = {
     "source_plugin_publish_issues",
     "source_github_discovery",
     "include_star_count",
+    "enable_image_card",
+    "image_render_timeout_seconds",
 }
 CREDENTIAL_PATTERNS = (
     re.compile(r"github_pat_[A-Za-z0-9_]{50,}"),
@@ -56,16 +58,26 @@ def main() -> int:
 
     metadata = simple_yaml(ROOT / "metadata.yaml")
     try:
-        _, verified_version = release_identity()
+        verified_name, verified_version = release_identity()
     except ValueError as exc:
         errors.append(str(exc))
         verified_version = ""
-    if verified_version != "1.0.0":
-        errors.append("正式发布版本必须为 1.0.0")
-    with (ROOT / "pyproject.toml").open("rb") as handle:
-        project_version = tomllib.load(handle)["project"]["version"]
-    if project_version != verified_version:
-        errors.append("pyproject.toml 与正式版本不一致")
+
+    if not verified_version:
+        errors.append("无法确定有效的发布版本")
+    else:
+        # Verify pyproject.toml matches metadata version
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            project_version = tomllib.load(handle)["project"]["version"]
+        # pyproject version may have PEP 440 normalization differences, but should
+        # be equivalent to the metadata version (minus any 'v' prefix)
+        if project_version != verified_version:
+            # Also try without 'v' prefix if present
+            if project_version != verified_version.removeprefix("v"):
+                errors.append(
+                    f"pyproject.toml 版本 ({project_version}) 与 "
+                    f"metadata/main 版本 ({verified_version}) 不一致"
+                )
 
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     missing_config = sorted(REQUIRED_CONFIG - schema.keys())

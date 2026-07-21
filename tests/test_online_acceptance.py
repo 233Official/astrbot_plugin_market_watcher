@@ -246,6 +246,9 @@ class Notifier:
     async def send(self, target, message):
         return True, None
 
+    def clear_prepared(self):
+        pass
+
 
 def _observation(version):
     return SourceObservation(

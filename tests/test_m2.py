@@ -923,9 +923,9 @@ class AstrBotAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         origin = "qqws:GROUP_MESSAGE:group_openid"
         context = Context()
-        result = await AstrBotNotifier(context, lambda: MessageChain).send(
-            origin, "text"
-        )
+        result = await AstrBotNotifier(
+            context, message_chain_loader=lambda: MessageChain
+        ).send(origin, "text")
         self.assertEqual(result, (True, None))
         self.assertEqual(context.calls, [(origin, "chain:text")])
 
@@ -949,13 +949,15 @@ class AstrBotAdapterTests(unittest.IsolatedAsyncioTestCase):
             return MessageChain
 
         self.assertEqual(
-            await AstrBotNotifier(Context(False), loader).send("secret-umo", "text"),
+            await AstrBotNotifier(Context(False), message_chain_loader=loader).send(
+                "secret-umo", "text"
+            ),
             (False, "astrbot_send_false"),
         )
         self.assertEqual(
-            await AstrBotNotifier(Context(error=RuntimeError("secret")), loader).send(
-                "secret-umo", "text"
-            ),
+            await AstrBotNotifier(
+                Context(error=RuntimeError("secret")), message_chain_loader=loader
+            ).send("secret-umo", "text"),
             (False, "astrbot_send_exception"),
         )
 

@@ -47,6 +47,9 @@ class Notifier:
         self.calls.append((target, message))
         return self.results.pop(0) if self.results else (True, None)
 
+    def clear_prepared(self):
+        pass
+
 
 def service(store, notifier=None):
     return MarketWatcherService(

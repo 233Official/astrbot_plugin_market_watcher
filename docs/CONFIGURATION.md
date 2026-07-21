@@ -22,6 +22,8 @@
 | `ai_timeout_seconds` | `int` | `60` | `10`–`120` | 否 |
 | `request_timeout_seconds` | `int` | `15` | `5`–`60` | 否 |
 | `max_items_per_push` | `int` | `10` | `1`–`50` | 否 |
+| `enable_image_card` | `bool` | `true` | `true` / `false` | 否 |
+| `image_render_timeout_seconds` | `int` | `8` | `3`–`20` | 否 |
 
 ---
 
@@ -118,6 +120,24 @@
 - 每个推送分片最多包含的变化条目数，默认 `10`。
 - 有效范围为 `1`–`50`；缺失、类型错误或越界时按 `10` 回退。
 - 调高可能产生更长消息；插件仍会按内部消息长度边界组织事实摘要。
+- 当 `enable_image_card` 为 `true` 时，`max_items_per_push` 被覆盖为每批最多 5 条（图片卡片视觉容量上限），以避免渲染超长卡片。
+
+---
+
+## 图片卡片
+
+### `enable_image_card`
+
+- 默认 `true`。
+- 开启后优先尝试将变化摘要渲染为 HTML 图片卡片再推送；渲染异常、超时或返回空/非法结果时，立即回退纯文本发送。
+- 关闭时维持纯文本行为，`max_items_per_push` 恢复原有控制。
+- 非布尔值按 `true` 回退。
+
+### `image_render_timeout_seconds`
+
+- 单次 HTML→图片渲染超时上限，默认 `8` 秒。
+- 有效范围为 `3`–`20`；缺失、类型错误或越界时按 `8` 回退。
+- 超时或取消时不会触发文本回退内的再次渲染，直接使用原始 `message` 文本发送。
 
 ---
 

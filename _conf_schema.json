@@ -83,5 +83,18 @@
     "type": "int",
     "default": 10,
     "slider": { "min": 1, "max": 50, "step": 1 }
+  },
+  "enable_image_card": {
+    "description": "启用图片卡片（T2I）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后尝试将变化摘要渲染为图片卡片再推送；渲染失败自动回退纯文本。关闭时仅发送纯文本。"
+  },
+  "image_render_timeout_seconds": {
+    "description": "图片渲染超时（秒）",
+    "type": "int",
+    "default": 8,
+    "slider": { "min": 3, "max": 20, "step": 1 },
+    "hint": "单次 HTML→图片渲染的超时上限。范围 3–20 秒；超时后自动回退纯文本，不阻塞投递。"
   }
 }

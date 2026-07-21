@@ -172,8 +172,11 @@ class HandlerCompatTests(unittest.IsolatedAsyncioTestCase):
         old = object.__new__(plugin_type_)
         new = object.__new__(plugin_type_)
         old._notifier = None
+        old.config = {"enable_image_card": False}
         new_notifier = Notifier()
         new._notifier = new_notifier
+        new.config = {"enable_image_card": False}
+        new._runtime_config = None
         metadata = SimpleNamespace(
             handler_name="test_push",
             handler=partial(partial(original, old), new),

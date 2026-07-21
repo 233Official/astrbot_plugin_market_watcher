@@ -34,7 +34,7 @@
 
 | 命令 | 权限 | 会话限制 | 实际行为与状态影响 |
 | --- | --- | --- | --- |
-| `/marketwatch test-push` | AstrBot 管理员 | 仅群聊 | 直接向当前会话发送测试消息；不采集来源，不修改订阅或 outbox |
+| `/marketwatch test-push` | AstrBot 管理员 | 仅群聊 | 直接向当前会话发送测试消息；图片卡片启用时走真实卡片准备/发送/回退路径，回复注明模式（`image` / `text_fallback` / `text`）；不采集来源，不修改订阅或 outbox |
 | `/marketwatch test-ai` | AstrBot 管理员 | 仅群聊 | 用固定虚构事实调用真实 Provider；不受 `enable_ai_summary` 阻止，不修改持久状态 |
 | `/marketwatch test-github` | AstrBot 管理员 | 仅群聊 | 请求 GitHub `/rate_limit`，验证匿名或 Token 认证和 primary rate limit；不使用生产检查预算 |
 | `/marketwatch test-outbox-prepare` | AstrBot 管理员 | 仅群聊 | 幂等创建一条长期 hold 的诊断 pending；不会自动投递 |

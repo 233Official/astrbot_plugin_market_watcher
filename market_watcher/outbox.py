@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
+from .card_renderer import MAX_EVENTS_PER_CARD, build_card_payload
 from .models import (
     ChangeEvent,
     DeliveryBatch,
@@ -20,7 +22,15 @@ MAX_TARGET_LENGTH = 512
 
 
 class Notifier(Protocol):
+    async def prepare(self, batch: DeliveryBatch) -> bytes | None:
+        """Render the card for a batch. Stores result internally for subsequent send calls."""
+        ...
+
     async def send(self, target: str, message: str) -> tuple[bool, str | None]: ...
+
+    def clear_prepared(self) -> None:
+        """Clear internally stored image bytes and delivery mode after a batch completes."""
+        ...
 
 
 class StateSaver(Protocol):
@@ -34,11 +44,13 @@ def create_batches(
     max_items: int,
     created_at: str,
     intro: str | None = None,
+    enable_image_card: bool = False,
 ) -> list[DeliveryBatch]:
     clean_targets, _ = validate_targets(targets)
     if not events or not clean_targets:
         return []
-    chunks = chunk_events(events, max_items)
+    effective_max = MAX_EVENTS_PER_CARD if enable_image_card else max_items
+    chunks = chunk_events(events, effective_max)
     batches: list[DeliveryBatch] = []
     for index, chunk in enumerate(chunks, 1):
         facts = render_summary(chunk, index, len(chunks), total_items=len(events))
@@ -53,6 +65,15 @@ def create_batches(
             ).encode()
         ).hexdigest()
         batch_id = f"batch:{digest}"
+        card_payload: dict[str, object] | None = None
+        if enable_image_card:
+            card_payload = build_card_payload(
+                chunk,
+                intro=_safe_card_intro(intro),
+                batch_index=index,
+                batch_total=len(chunks),
+                total_items=len(events),
+            )
         batches.append(
             DeliveryBatch(
                 batch_id=batch_id,
@@ -63,9 +84,14 @@ def create_batches(
                     target: DeliveryTargetState(target=target)
                     for target in clean_targets
                 },
+                card_payload=card_payload,
             )
         )
     return batches
+
+
+def _safe_card_intro(intro: str | None) -> str:
+    return intro or "本次市场监测到新的插件动态。"
 
 
 async def deliver_pending(
@@ -80,6 +106,7 @@ async def deliver_pending(
     pending = 0
     normalized = False
     for batch in state.outbox.values():
+        # Normalise exhausted targets before checking due-ness
         for target_state in batch.targets.values():
             if (
                 target_state.status is DeliveryStatus.FAILED
@@ -88,39 +115,70 @@ async def deliver_pending(
                 target_state.status = DeliveryStatus.EXHAUSTED
                 target_state.next_retry_at = None
                 normalized = True
-            if target_state.status in {
-                DeliveryStatus.SENT,
-                DeliveryStatus.EXHAUSTED,
-            }:
+
+        # Determine whether this batch has any target that needs delivery
+        has_due = False
+        for target_state in batch.targets.values():
+            if target_state.status in {DeliveryStatus.SENT, DeliveryStatus.EXHAUSTED}:
                 continue
             if target_state.next_retry_at and target_state.next_retry_at > now:
                 pending += 1
                 continue
-            target_state.last_attempt_at = clock()
+            has_due = True
+
+        if not has_due:
+            # No due targets for this batch; skip prepare entirely
+            continue
+
+        # Prepare phase: clears temp image bytes; if card_payload is None,
+        # prepare returns None and no image will be attempted.
+        # try/finally ensures clear_prepared() runs after every batch attempt,
+        # including CancelledError / exception exits.
+        try:
             try:
-                success, error_code = await notifier.send(
-                    target_state.target, batch.message
-                )
+                await notifier.prepare(batch)
+            except asyncio.CancelledError:
+                raise
             except Exception:
-                success, error_code = False, "delivery_exception"
-            target_state.attempts += 1
-            if success:
-                target_state.status = DeliveryStatus.SENT
-                target_state.last_error_code = None
-                target_state.next_retry_at = None
-                sent += 1
-            else:
-                target_state.last_error_code = error_code or "delivery_failed"
-                if target_state.attempts >= batch.max_attempts:
-                    target_state.status = DeliveryStatus.EXHAUSTED
-                    target_state.next_retry_at = None
-                else:
-                    target_state.status = DeliveryStatus.FAILED
-                    target_state.next_retry_at = _retry_at(
-                        target_state.last_attempt_at, target_state.attempts
+                pass
+
+            for target_state in batch.targets.values():
+                if target_state.status in {
+                    DeliveryStatus.SENT,
+                    DeliveryStatus.EXHAUSTED,
+                }:
+                    continue
+                if target_state.next_retry_at and target_state.next_retry_at > now:
+                    continue  # already counted in the due check above
+                target_state.last_attempt_at = clock()
+                try:
+                    success, error_code = await notifier.send(
+                        target_state.target, batch.message
                     )
-                    pending += 1
-            saver.save(state)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    success, error_code = False, "delivery_exception"
+                target_state.attempts += 1
+                if success:
+                    target_state.status = DeliveryStatus.SENT
+                    target_state.last_error_code = None
+                    target_state.next_retry_at = None
+                    sent += 1
+                else:
+                    target_state.last_error_code = error_code or "delivery_failed"
+                    if target_state.attempts >= batch.max_attempts:
+                        target_state.status = DeliveryStatus.EXHAUSTED
+                        target_state.next_retry_at = None
+                    else:
+                        target_state.status = DeliveryStatus.FAILED
+                        target_state.next_retry_at = _retry_at(
+                            target_state.last_attempt_at, target_state.attempts
+                        )
+                        pending += 1
+                saver.save(state)
+        finally:
+            notifier.clear_prepared()
     if normalized:
         saver.save(state)
     return sent, pending

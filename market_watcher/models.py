@@ -473,9 +473,10 @@ class DeliveryBatch:
     created_at: str
     targets: dict[str, DeliveryTargetState]
     max_attempts: int = 5
+    card_payload: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "batch_id": self.batch_id,
             "created_at": self.created_at,
             "event_ids": list(self.event_ids),
@@ -485,10 +486,15 @@ class DeliveryBatch:
                 key: self.targets[key].to_dict() for key in sorted(self.targets)
             },
         }
+        if self.card_payload is not None:
+            result["card_payload"] = self.card_payload
+        return result
 
     @classmethod
     def from_dict(cls, value: Any, path: str) -> DeliveryBatch:
         data = _dict(value, path)
+        if "card_payload" not in data:
+            data = {**data, "card_payload": None}
         _required(
             data,
             {
@@ -498,6 +504,7 @@ class DeliveryBatch:
                 "created_at",
                 "targets",
                 "max_attempts",
+                "card_payload",
             },
             path,
         )
@@ -520,6 +527,10 @@ class DeliveryBatch:
             ):
                 target.status = DeliveryStatus.EXHAUSTED
                 target.next_retry_at = None
+        card_payload = data["card_payload"]
+        if card_payload is not None:
+            if type(card_payload) is not dict:
+                raise ModelValidationError(f"{path}.card_payload must be an object")
         return cls(
             batch_id=_str(data["batch_id"], f"{path}.batch_id"),
             event_ids=_str_tuple(data["event_ids"], f"{path}.event_ids"),
@@ -527,6 +538,7 @@ class DeliveryBatch:
             created_at=_str(data["created_at"], f"{path}.created_at"),
             targets=targets,
             max_attempts=max_attempts,
+            card_payload=card_payload,
         )
 
 

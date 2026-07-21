@@ -1,6 +1,6 @@
 # AstrBot 插件开发与发布 Playbook
 
-本文记录 `astrbot_plugin_market_watcher` 已验证的包结构、测试边界和发布检查。内容适用于当前 `1.0.0`；真实线上验收结论见 [ONLINE_ACCEPTANCE](ONLINE_ACCEPTANCE.md)。
+本文记录 `astrbot_plugin_market_watcher` 已验证的包结构、测试边界和发布检查。内容适用于当前 `1.1.0`；真实线上验收结论见 [ONLINE_ACCEPTANCE](ONLINE_ACCEPTANCE.md)。
 
 ---
 
@@ -14,9 +14,19 @@
 
 ---
 
+## T2I Renderer 诊断日志
+
+- `__init__` 为实例设置进程内安全 marker `_instance_marker`（`id(self)` 的十六进制）。
+- `initialize()` 在构造 notifier 前执行只读诊断采样，记录到一条结构化日志（`renderer diagnostic`），包含 `instance_marker`、`notifier_marker`、`runtime_marker`、`image_card`、`plugin_callable`、`context_callable`、`api_callable`、`owner`、`plugin_type`、`context_type`、`notifier_callable`。
+- `test_push()` 在图片/文本分支前记录 `test-push diagnostic`，包含 `instance_marker`、`notifier_marker`、`runtime_marker`、`image_card`、`plugin_callable`、`notifier_callable`、`condition`、`notifier_present`、`service_present`。
+- Notifier 始终只接收 `self.html_render`（callable 时）或 `None`；不使用 `astrbot.api.html_renderer.render_custom_template` 作为发送 fallback。`api_callable` 仅用于观测宿主是否提供该 API。
+- `AstrBotNotifier.prepare()` 始终使用 `return_url=False, options=options` 关键字调用 renderer，并对每次调用记录结构化诊断（`prepare diagnostic`），覆盖 `skipped` / `image_ready` / `invalid_image` / `string` / `none` / `exception` / `timeout` / `cancelled` 路径。日志不含原始值、URL、路径或凭据。`image_ready` 含 `source=bytes/file`、`image_kind` 和 `size`；`invalid_image` 含安全 `invalid_signature`（`internal_server_error`/`html`/`json`/`unknown`）和 `size`。现有文件路径不再出现 `outcome=string`，而是经 `asyncio.to_thread` 读取后进入校验路径。
+
+---
+
 ## Metadata 与配置
 
-- `metadata.yaml`、`main.py` 注册版本和 `pyproject.toml` 当前均为 `1.0.0`，版本不使用 `v` 前缀；Git tag 使用 `v1.0.0`。
+- `metadata.yaml`、`main.py` 注册版本和 `pyproject.toml` 当前均为 `1.1.0`，版本不使用 `v` 前缀；Git tag 使用 `v1.1.0`。
 - 当前声明平台为 `aiocqhttp` 与 QQ 官方 WebSocket `qq_official`。`qq_official_webhook` 尚未验收，不在支持声明中。
 - `github_token` 默认值必须为空，并使用 `obvious_hint` 提醒这是敏感输入。Token 只用于提高 GitHub API 限额，不得进入日志、fixture、文档或发布包示例。
 - `llm_provider_id` 使用 AstrBot `_special: select_provider` 选择器。留空时，手动检查解析当前会话默认 Provider，自动检查解析首个有效推送目标的默认 Provider。
@@ -81,7 +91,7 @@
 
 ## 发布包防线
 
-- `scripts/package_release.py` 使用固定时间戳、固定文件权限、稳定排序和单一顶层目录生成确定性 ZIP，并同步写出 SHA-256 sidecar。
+- `scripts/package_plugin.py` 使用固定时间戳、固定文件权限、稳定排序和单一顶层目录生成确定性 ZIP，并同步写出 SHA-256 sidecar。支持正式包与 `--dev-version` 测试包，可指定 `--test-label` 和 `--flat`。`scripts/package_release.py` 是兼容包装入口。
 - 打包自检拒绝绝对路径、路径穿越、符号链接、缓存、测试、脚本、环境文件和编译产物，并核对必需文件、版本、大小及包上下文导入。
 - `scripts/verify_release.py` 检查三个正式版本源一致性、安全默认值、必需设计/验收文档及 README 入口、文件大小、疑似凭据、文档链接、临时 ZIP 解包导入和默认单元测试。
 - 凭据扫描只是一道防线，不能替代提交前人工确认；任何真实 Token、UMO、服务器信息或私有路径都不得写入仓库。
@@ -118,7 +128,7 @@ python -m ruff check .
 python -m ruff format --check .
 python -m compileall -q main.py market_watcher tests scripts
 python scripts/verify_release.py
-python scripts/package_release.py
+python scripts/package_plugin.py
 ```
 
 - `verify_release.py` 已运行默认单元测试，无需在同一 CI job 中再次执行相同 unittest 命令。

@@ -159,6 +159,7 @@ class MarketWatcherService:
         enable_ai_summary: bool = False,
         llm_provider_id: str = "",
         provider_origin: str | None = None,
+        enable_image_card: bool = False,
     ) -> RunReport:
         if self.lock.locked():
             report = RunReport(
@@ -181,6 +182,7 @@ class MarketWatcherService:
                 llm_provider_id,
                 provider_origin,
                 overall_started,
+                enable_image_card=enable_image_card,
             )
             if report.phase_durations_ms["overall"] == 0:
                 self._record_phase(report, "overall", overall_started)
@@ -199,6 +201,7 @@ class MarketWatcherService:
         llm_provider_id: str,
         provider_origin: str | None,
         overall_started: float,
+        enable_image_card: bool = False,
     ) -> RunReport:
         report = RunReport(status="running", started_at=self.clock())
         report.run_id = _run_id(report.started_at)
@@ -435,6 +438,7 @@ class MarketWatcherService:
             max_items=max_items_per_push,
             created_at=self.clock(),
             intro=intro,
+            enable_image_card=enable_image_card,
         )
         inserted = 0
         for batch in batches:

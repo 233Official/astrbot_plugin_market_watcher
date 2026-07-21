@@ -117,7 +117,7 @@ class StructureTests(unittest.TestCase):
         metadata = read_simple_yaml(ROOT / "metadata.yaml")
         self.assertEqual(metadata["name"], "astrbot_plugin_market_watcher")
         self.assertEqual(metadata["author"], "233Official")
-        self.assertEqual(metadata["version"], "1.0.0")
+        self.assertEqual(metadata["version"], "1.1.0")
         self.assertEqual(
             metadata["repo"],
             "https://github.com/233Official/astrbot_plugin_market_watcher",
@@ -175,7 +175,7 @@ class StructureTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertEqual(project["name"], "astrbot-plugin-market-watcher")
-        self.assertEqual(project["version"], "1.0.0")
+        self.assertEqual(project["version"], "1.1.0")
         self.assertEqual(project["requires-python"], ">=3.10")
         self.assertEqual(project["dependencies"], runtime_dependencies)
         self.assertNotIn("tomli", project["dependencies"])
@@ -192,10 +192,14 @@ class StructureTests(unittest.TestCase):
             "ruff check .",
             "compileall",
             "scripts/verify_release.py",
-            "scripts/package_release.py",
+            "scripts/package_plugin.py",
         ):
             self.assertIn(command, workflow)
         self.assertNotIn("release-action", workflow.lower())
+
+    def test_launch_json_and_release_workflow_exist(self) -> None:
+        self.assertTrue((ROOT / ".vscode/launch.json").is_file())
+        self.assertTrue((ROOT / ".github/workflows/release.yml").is_file())
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/DESIGN.md", readme)

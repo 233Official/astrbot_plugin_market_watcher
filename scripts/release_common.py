@@ -15,6 +15,8 @@ from types import ModuleType, SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ZIP_BYTES = 16 * 1024 * 1024
+FIXED_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
+FILE_MODE = 0o100644
 REQUIRED_FILES = {
     "CONTRIBUTING.md",
     "LICENSE",

@@ -6,7 +6,44 @@
 
 ## Unreleased
 
-- 暂无。
+### Added
+
+- （预留）
+
+---
+
+## 1.1.0 - 2026-07-22
+
+### Added
+
+- 增加图片卡片（T2I）市场简报：`card_renderer` 视觉模块，outbox 批次携带可选 `card_payload`，notifier 两阶段 prepare/send 驱动 HTML→图片渲染，渲染异常或超时自动回退纯文本。
+- 增加 AstrBot T2I 服务路径型返回支持：`html_render(return_url=False)` 返回本地文件路径时，`prepare()` 以 `asyncio.to_thread` 安全读取、magic 校验（JPEG/PNG/WebP/GIF）、大小验证（上限 20 MiB），无效内容安全拒绝仅记录 `invalid_signature`。
+- 增加 json-safe outbox payload 与跨重启可靠性：`DeliveryBatch.card_payload` 序列化至磁盘 state，重启后恢复重试。
+- 增加图片卡片分页：启用时每批最多 5 条事件，多目标复用单次渲染结果。
+- 增加图片失败同次 attempt 文本降级：图片发送失败时同一 attempt 自动降级原文本；图片与文本均失败才增加 attempt 计数。
+- 新增配置 `enable_image_card`（默认 `true`）和 `image_render_timeout_seconds`（默认 `8`，范围 3–20）。
+- `marketwatch test-push` 在图片卡片启用时报实际发送模式（`image` / `text_fallback` / `text`）。
+- 增加 renderer 诊断日志：初始化时采样 `plugin_callable`、`context_callable`、`api_callable`、MRO owner 和 `notifier_callable`，仅观测不使用模块 fallback。
+- `AstrBotNotifier.prepare()` 增加结构化结果观测日志，覆盖 `image_ready` / `string` / `invalid_image` / `exception` / `timeout` / `cancelled` 路径，不含原始值或凭据。
+- `CancelledError` 传播，确保不因渲染超时或取消误发文本回退。
+- 增加标准 `scripts/package_plugin.py`（支持 `--dev-version`、`--test-label`、`--flat`）、`.vscode/launch.json`、`.github/workflows/release.yml`；CI/CD 与发布结构整改。
+- 增加 Jinja2 `SandboxedEnvironment` 真实模板合约测试，覆盖全部卡片形状；`card_renderer.CARD_TEMPLATE` 所有 Jinja 表达式均用 `|e` 转义。
+- `AstrBotNotifier` 增加 `_prepare_attempted` 非持久化标志，准确区分 `text_fallback`（图片卡启用且 prepare 尝试过）与 `text`（纯文本 batch/图片关闭）。
+
+### Changed
+
+- 正式版本从 `1.0.0` 升级至 `1.1.0`（新功能向后兼容）。
+- `DeliveryBatch` 增加可选 `card_payload` 字段，`to_dict`/`from_dict` 兼容旧 state 无 payload 场景。
+- `Notifier` 协议增加 `prepare` 方法，`AstrBotNotifier` 注入 `html_render` 和超时。
+- `RuntimeConfig` 增加图片卡片配置项，`format_status` 显示图片卡片状态。
+- `AstrBotNotifier.send()` 的 `text_fallback` 判定从 `_pending_image_bytes is not None` 改为 `_prepare_attempted`，修复图片卡启用但 renderer 返回无效时语义。
+
+### Fixed
+
+- 修复 Jinja2 `card.items` 冲突：模板中冲突的保留字访问改为安全显式 `card.get("items", [])`；增加 `SandboxedEnvironment` 合约测试防止回归。
+- `html_render` 注入来源修正为 `getattr(self, "html_render", None)` 而非 `self.context`。
+- `prepare()` 调用 `html_render` 使用 `return_url=False, options=options` 关键字参数确保返回 bytes。
+- `deliver_pending()` 图片串批修复：每存在到期目标的 batch 均触发 `prepare()` 清除前一图片 bytes。
 
 ---
 

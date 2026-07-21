@@ -34,7 +34,10 @@ python scripts/verify_release.py
 仅在确需验证发布包时运行：
 
 ```bash
-python scripts/package_release.py
+python scripts/package_plugin.py                              # 正式包
+python scripts/package_plugin.py --dev-version --test-label x  # 测试包
+python scripts/package_plugin.py --flat                        # 旧版扁平包
+python scripts/package_release.py                              # 兼容入口（同上）
 ```
 
 检查生成 ZIP 的顶层目录、必需文件、导入契约、大小和 SHA-256。不要手工修改 `dist/` 产物，也不要把测试、缓存、凭据或本地环境文件加入发布包。
