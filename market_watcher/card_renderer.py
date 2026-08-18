@@ -8,11 +8,15 @@ import unicodedata
 from collections.abc import Iterable
 from enum import Enum
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, TypeVar
 
 from .models import ChangeEvent, ChangeKind, SourceKind
 
+# Compatibility cap still consumed by the current outbox implementation. The
+# renderer/page contract supports 15; the outbox fixer should switch to
+# ``partition_events_balanced`` before changing this compatibility value.
 MAX_EVENTS_PER_CARD = 5
+MAX_ITEMS_PER_PAGE = 15
 INTRO_MAX_LENGTH = 180
 NAME_MAX_LENGTH = 72
 VERSION_MAX_LENGTH = 36
@@ -20,6 +24,14 @@ AUTHOR_MAX_LENGTH = 48
 DESCRIPTION_MAX_LENGTH = 260
 CHIP_MAX_LENGTH = 32
 STATUS_MAX_LENGTH = 40
+
+_T = TypeVar("_T")
+
+_LAYOUTS = {
+    1: {"columns": 1, "canvas_width": 760, "grid_class": "events--1-column"},
+    2: {"columns": 2, "canvas_width": 1440, "grid_class": "events--2-columns"},
+    3: {"columns": 3, "canvas_width": 2120, "grid_class": "events--3-columns"},
+}
 
 SOURCE_LABELS = {
     SourceKind.MARKET.value: "AstrBot 市场",
@@ -91,6 +103,55 @@ class _TextExtractor(HTMLParser):
             self.parts.append(data)
 
 
+def balanced_page_sizes(
+    event_count: int,
+    max_items: int = MAX_ITEMS_PER_PAGE,
+) -> list[int]:
+    """Return stable, balanced page sizes without dropping or reordering items."""
+
+    if type(event_count) is not int or event_count < 0:
+        raise ValueError("event_count must be a non-negative integer")
+    if type(max_items) is not int or max_items < 1:
+        raise ValueError("max_items must be a positive integer")
+    if event_count == 0:
+        return []
+    page_count = (event_count + max_items - 1) // max_items
+    base_size, larger_pages = divmod(event_count, page_count)
+    return [base_size + 1] * larger_pages + [base_size] * (page_count - larger_pages)
+
+
+def partition_events_balanced(
+    events: Iterable[_T],
+    max_items: int = MAX_ITEMS_PER_PAGE,
+) -> list[list[_T]]:
+    """Partition events in original order using ``balanced_page_sizes``."""
+
+    event_list = list(events)
+    pages: list[list[_T]] = []
+    offset = 0
+    for size in balanced_page_sizes(len(event_list), max_items):
+        pages.append(event_list[offset : offset + size])
+        offset += size
+    return pages
+
+
+def layout_spec(item_count: int) -> dict[str, object]:
+    """Return deterministic 1/2/3-column metadata for a rendered page."""
+
+    if type(item_count) is not int or not 0 <= item_count <= MAX_ITEMS_PER_PAGE:
+        raise ValueError("item_count must be between 0 and 15")
+    layout_key = 1 if item_count <= 5 else 2 if item_count <= 10 else 3
+    layout = _LAYOUTS[layout_key]
+    columns = int(layout["columns"])
+    rows = (item_count + columns - 1) // columns if item_count else 0
+    return {
+        "layout_columns": columns,
+        "layout_rows": rows,
+        "canvas_width": int(layout["canvas_width"]),
+        "grid_class": str(layout["grid_class"]),
+    }
+
+
 def build_card_payload(
     events: Iterable[ChangeEvent],
     *,
@@ -102,13 +163,14 @@ def build_card_payload(
     """Return a bounded presentation snapshot containing only JSON primitives."""
 
     event_list = list(events)
-    if len(event_list) > MAX_EVENTS_PER_CARD:
+    if len(event_list) > MAX_ITEMS_PER_PAGE:
         raise ValueError(
-            "card payload accepts at most 5 events; paginate events upstream"
+            "card payload accepts at most 15 events; use partition_events_balanced"
         )
     _validate_batch(batch_index, batch_total, total_items)
 
     safe_intro = _clean_text(intro, INTRO_MAX_LENGTH)
+    layout = layout_spec(len(event_list))
     payload: dict[str, object] = {
         "title": "插件市场变更简报",
         "intro": safe_intro or "本次市场监测到新的插件动态。",
@@ -117,6 +179,7 @@ def build_card_payload(
         "total_items": total_items,
         "item_count": len(event_list),
         "items": [_event_snapshot(event) for event in event_list],
+        **layout,
     }
     return payload
 
@@ -126,11 +189,34 @@ def build_render_request(
 ) -> tuple[str, dict[str, object], dict[str, object]]:
     """Return the self-contained template, renderer data, and screenshot options."""
 
+    render_payload = _render_payload(payload)
     return (
         CARD_TEMPLATE,
-        {"card": payload},
-        {"full_page": True, "type": "png", "quality": 90},
+        {"card": render_payload},
+        {
+            "viewport_width": render_payload["canvas_width"],
+            "full_page": True,
+            "type": "png",
+            "quality": 90,
+        },
     )
+
+
+def _render_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Backfill layout metadata for persisted payloads from older releases."""
+
+    item_count = payload.get("item_count")
+    if type(item_count) is not int:
+        items = payload.get("items")
+        item_count = len(items) if isinstance(items, list) else 0
+    inferred = layout_spec(min(max(item_count, 0), MAX_ITEMS_PER_PAGE))
+    result = dict(payload)
+    for key, value in inferred.items():
+        result.setdefault(key, value)
+    width = result.get("canvas_width")
+    if type(width) is not int or width not in {760, 1440, 2120}:
+        raise ValueError("payload canvas_width is unsupported")
+    return result
 
 
 def _event_snapshot(event: ChangeEvent) -> dict[str, object]:
@@ -234,9 +320,7 @@ def _clean_list(values: object, limit: int, max_items: int) -> list[str]:
         cleaned = _clean_text(value, limit)
         if cleaned and cleaned not in result:
             result.append(cleaned)
-        if len(result) == max_items:
-            break
-    return result
+    return _with_overflow(result, max_items)
 
 
 def _changed_fields(values: object) -> list[str]:
@@ -257,9 +341,7 @@ def _changed_fields(values: object) -> list[str]:
         label = _clean_text(label, CHIP_MAX_LENGTH)
         if label and label not in result:
             result.append(label)
-        if len(result) == 8:
-            break
-    return result
+    return _with_overflow(result, 8)
 
 
 def _sources(record: object) -> list[str]:
@@ -277,7 +359,14 @@ def _sources(record: object) -> list[str]:
             continue
         labels.add(SOURCE_LABELS.get(value, value.replace("_", " ")))
     order = {label: index for index, label in enumerate(SOURCE_LABELS.values())}
-    return sorted(labels, key=lambda label: (order.get(label, len(order)), label))[:4]
+    ordered = sorted(labels, key=lambda label: (order.get(label, len(order)), label))
+    return _with_overflow(ordered, 4)
+
+
+def _with_overflow(values: list[str], max_items: int) -> list[str]:
+    if len(values) <= max_items:
+        return values
+    return [*values[:max_items], f"另 {len(values) - max_items} 项"]
 
 
 def _clean_text(value: Any, limit: int) -> str | None:
@@ -322,17 +411,19 @@ CARD_TEMPLATE = """<!doctype html>
   <title>{{ card.title|e }}</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; width: 760px; background: #e8e5de; }
+    html, body { margin: 0; background: #e8e5de; }
     body {
       color: #22263a;
       font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
       -webkit-font-smoothing: antialiased;
     }
     .canvas {
-      width: 760px;
       padding: 30px;
       background: #e8e5de;
     }
+    body.layout--1, .layout--1 .canvas { width: 760px; }
+    body.layout--2, .layout--2 .canvas { width: 1440px; }
+    body.layout--3, .layout--3 .canvas { width: 2120px; }
     .sheet {
       overflow: hidden;
       border: 1px solid #d8d5cf;
@@ -388,10 +479,20 @@ CARD_TEMPLATE = """<!doctype html>
       font-weight: 700;
     }
     .batch strong { color: #2d3678; font-size: 13px; }
-    .events { padding: 10px 18px 18px; }
+    .events {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px 18px;
+      padding: 20px 18px 18px;
+    }
+    .layout--2 .events {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .layout--3 .events {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
     .event {
       position: relative;
-      margin-top: 10px;
       padding: 21px 22px 20px 25px;
       border: 1px solid #e5e6ec;
       border-radius: 17px;
@@ -497,7 +598,13 @@ CARD_TEMPLATE = """<!doctype html>
     }
   </style>
 </head>
-<body>
+  {% if card.get("layout_columns", 1) == 1 %}
+<body class="layout--1">
+  {% elif card.get("layout_columns") == 2 %}
+<body class="layout--2">
+  {% else %}
+<body class="layout--3">
+  {% endif %}
   <main class="canvas">
     <section class="sheet">
       <header class="header">
@@ -595,4 +702,12 @@ CARD_TEMPLATE = """<!doctype html>
 """
 
 
-__all__ = ["CARD_TEMPLATE", "build_card_payload", "build_render_request"]
+__all__ = [
+    "CARD_TEMPLATE",
+    "MAX_ITEMS_PER_PAGE",
+    "balanced_page_sizes",
+    "build_card_payload",
+    "build_render_request",
+    "layout_spec",
+    "partition_events_balanced",
+]

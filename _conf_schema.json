@@ -96,5 +96,25 @@
     "default": 8,
     "slider": { "min": 3, "max": 20, "step": 1 },
     "hint": "单次 HTML→图片渲染的超时上限。范围 3–20 秒；超时后自动回退纯文本，不阻塞投递。"
+  },
+  "image_card_max_items": {
+    "description": "单张图片最大事件数",
+    "type": "int",
+    "default": 15,
+    "hint": "图片模式单张卡片最多展示的事件数，仅允许 5/10/15；事件较多时按均衡分页拆成多张图片。无效值回退为 15。"
+  },
+  "max_images_per_delivery": {
+    "description": "每窗口每目标图片上限",
+    "type": "int",
+    "default": 2,
+    "slider": { "min": 1, "max": 10, "step": 1 },
+    "hint": "每个推送目标在每个 60 秒发送窗口内最多发送的图片数量；超出部分保持待发送，约 60 秒后自动续传。范围 1–10。"
+  },
+  "image_send_interval_seconds": {
+    "description": "图片发送间隔（秒）",
+    "type": "int",
+    "default": 2,
+    "slider": { "min": 0, "max": 30, "step": 1 },
+    "hint": "同一推送目标相邻两次图片发送的最小间隔。范围 0–30 秒；纯文本模式不受影响。"
   }
 }

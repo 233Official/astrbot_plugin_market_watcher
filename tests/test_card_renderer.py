@@ -10,8 +10,11 @@ from market_watcher.card_renderer import (
     CARD_TEMPLATE,
     DESCRIPTION_MAX_LENGTH,
     NAME_MAX_LENGTH,
+    balanced_page_sizes,
     build_card_payload,
     build_render_request,
+    layout_spec,
+    partition_events_balanced,
 )
 from market_watcher.models import (
     ChangeEvent,
@@ -149,12 +152,22 @@ class CardPayloadTests(unittest.TestCase):
         self.assertEqual(item["author"], "作者")
         self.assertEqual(item["tags"], ["效率", "视觉"])
 
-    def test_five_events_are_accepted_and_six_are_rejected(self) -> None:
-        five = [make_event(index=index) for index in range(1, 6)]
-        self.assertEqual(payload_for(five)["item_count"], 5)
+    def test_fifteen_events_are_accepted_and_sixteen_are_rejected(self) -> None:
+        fifteen = [make_event(index=index) for index in range(1, 16)]
+        self.assertEqual(payload_for(fifteen)["item_count"], 15)
 
-        with self.assertRaisesRegex(ValueError, "at most 5 events"):
-            payload_for([*five, make_event(index=6)])
+        with self.assertRaisesRegex(ValueError, "at most 15 events"):
+            payload_for([*fifteen, make_event(index=16)])
+
+    def test_chip_overflow_is_explicit(self) -> None:
+        event = make_event(
+            platforms=tuple(f"平台 {index}" for index in range(1, 9)),
+            tags=tuple(f"标签 {index}" for index in range(1, 9)),
+        )
+        item = payload_for([event])["items"][0]  # type: ignore[index]
+
+        self.assertEqual(item["platforms"][-1], "另 2 项")
+        self.assertEqual(item["tags"][-1], "另 2 项")
 
     def test_payload_survives_json_round_trip(self) -> None:
         payload = payload_for([make_event(), make_event(ChangeKind.UPDATED, index=2)])
@@ -172,8 +185,24 @@ class CardTemplateTests(unittest.TestCase):
         self.assertEqual(data, {"card": payload})
         self.assertEqual(
             options,
-            {"full_page": True, "type": "png", "quality": 90},
+            {
+                "viewport_width": 760,
+                "full_page": True,
+                "type": "png",
+                "quality": 90,
+            },
         )
+
+    def test_render_request_uses_payload_canvas_width(self) -> None:
+        for count, expected_width in ((1, 760), (6, 1440), (11, 2120)):
+            with self.subTest(count=count):
+                payload = payload_for(
+                    [make_event(index=index) for index in range(1, count + 1)]
+                )
+                _template, data, options = build_render_request(payload)
+
+                self.assertEqual(options["viewport_width"], expected_width)
+                self.assertEqual(data["card"]["canvas_width"], expected_width)  # type: ignore[index]
 
     def test_template_is_self_contained_and_matches_visual_contract(self) -> None:
         lowered = CARD_TEMPLATE.lower()
@@ -184,6 +213,11 @@ class CardTemplateTests(unittest.TestCase):
         self.assertIn("#3346a8", lowered)
         self.assertIn("#23845b", lowered)
         self.assertIn("#b97818", lowered)
+        self.assertIn("display: grid", lowered)
+        self.assertIn("repeat(2, minmax(0, 1fr))", lowered)
+        self.assertIn("repeat(3, minmax(0, 1fr))", lowered)
+        self.assertIn("width: 1440px", lowered)
+        self.assertIn("width: 2120px", lowered)
         for forbidden in (
             "<script",
             "<link",
@@ -232,6 +266,21 @@ class CardTemplateTests(unittest.TestCase):
                 [make_event(index=index) for index in range(1, 6)],
                 ("本批 5 项", "插件 1", "插件 2", "插件 3", "插件 4", "插件 5"),
             ),
+            (
+                "six events",
+                [make_event(index=index) for index in range(1, 7)],
+                ("layout--2", "本批 6 项", "插件 1", "插件 6"),
+            ),
+            (
+                "eleven events",
+                [make_event(index=index) for index in range(1, 12)],
+                ("layout--3", "本批 11 项", "插件 1", "插件 11"),
+            ),
+            (
+                "fifteen events",
+                [make_event(index=index) for index in range(1, 16)],
+                ("layout--3", "本批 15 项", "插件 1", "插件 15"),
+            ),
         )
 
         for name, events, expected_texts in cases:
@@ -245,6 +294,63 @@ class CardTemplateTests(unittest.TestCase):
                 self.assertEqual(rendered.count('<article class="event '), len(events))
                 for text in expected_texts:
                     self.assertIn(text, rendered)
+
+
+class CardLayoutContractTests(unittest.TestCase):
+    def test_layout_breakpoints_are_stable(self) -> None:
+        cases = {
+            1: (1, 1, 760, "events--1-column"),
+            5: (1, 5, 760, "events--1-column"),
+            6: (2, 3, 1440, "events--2-columns"),
+            10: (2, 5, 1440, "events--2-columns"),
+            11: (3, 4, 2120, "events--3-columns"),
+            15: (3, 5, 2120, "events--3-columns"),
+        }
+
+        for count, expected in cases.items():
+            with self.subTest(count=count):
+                spec = layout_spec(count)
+                payload = payload_for(
+                    [make_event(index=index) for index in range(1, count + 1)]
+                )
+                actual = (
+                    spec["layout_columns"],
+                    spec["layout_rows"],
+                    spec["canvas_width"],
+                    spec["grid_class"],
+                )
+                self.assertEqual(actual, expected)
+                for key, value in spec.items():
+                    self.assertEqual(payload[key], value)
+
+    def test_balanced_page_sizes_match_product_contract(self) -> None:
+        self.assertEqual(balanced_page_sizes(0), [])
+        self.assertEqual(balanced_page_sizes(15), [15])
+        self.assertEqual(balanced_page_sizes(16), [8, 8])
+        self.assertEqual(balanced_page_sizes(30), [15, 15])
+        self.assertEqual(balanced_page_sizes(50), [13, 13, 12, 12])
+
+    def test_balanced_partition_preserves_order_and_capacity(self) -> None:
+        events = [make_event(index=index) for index in range(1, 51)]
+        pages = partition_events_balanced(events)
+
+        self.assertEqual([len(page) for page in pages], [13, 13, 12, 12])
+        self.assertEqual(
+            [event.event_id for page in pages for event in page],
+            [event.event_id for event in events],
+        )
+        self.assertLessEqual(max(map(len, pages)), 15)
+        self.assertLessEqual(max(map(len, pages)) - min(map(len, pages)), 1)
+
+    def test_layout_and_pagination_reject_invalid_counts(self) -> None:
+        for count in (-1, 16):
+            with self.subTest(layout_count=count):
+                with self.assertRaises(ValueError):
+                    layout_spec(count)
+        with self.assertRaises(ValueError):
+            balanced_page_sizes(-1)
+        with self.assertRaises(ValueError):
+            balanced_page_sizes(1, max_items=0)
 
 
 if __name__ == "__main__":

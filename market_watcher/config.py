@@ -21,6 +21,9 @@ class RuntimeConfig:
     max_items_per_push: int
     enable_image_card: bool
     image_render_timeout_seconds: int
+    image_card_max_items: int
+    max_images_per_delivery: int
+    image_send_interval_seconds: int
 
 
 def parse_runtime_config(config: Mapping[str, Any]) -> RuntimeConfig:
@@ -43,7 +46,20 @@ def parse_runtime_config(config: Mapping[str, Any]) -> RuntimeConfig:
         image_render_timeout_seconds=_int_range(
             config.get("image_render_timeout_seconds"), 8, 3, 20
         ),
+        image_card_max_items=_allowed_values(
+            config.get("image_card_max_items"), 15, (5, 10, 15)
+        ),
+        max_images_per_delivery=_int_range(
+            config.get("max_images_per_delivery"), 2, 1, 10
+        ),
+        image_send_interval_seconds=_int_range(
+            config.get("image_send_interval_seconds"), 2, 0, 30
+        ),
     )
+
+
+def _allowed_values(value: Any, default: int, allowed: tuple[int, ...]) -> int:
+    return value if type(value) is int and value in allowed else default
 
 
 def _bool(value: Any, default: bool) -> bool:

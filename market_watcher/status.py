@@ -14,6 +14,10 @@ def format_status(
     scheduler_last_attempt: str | None,
     scheduler_last_success: str | None,
     scheduler_error: str,
+    drain_scheduler_state: str,
+    drain_last_attempt: str | None,
+    drain_last_success: str | None,
+    drain_error: str,
     service_busy: bool,
     health: str,
     schema_version: str,
@@ -27,6 +31,8 @@ def format_status(
     effective_target_count: int,
     pending: int,
     exhausted: int,
+    throttled: int,
+    next_drain: str,
     last_text: str,
 ) -> str:
     """Render status without exposing configured target or token values."""
@@ -42,18 +48,28 @@ def format_status(
     )
     image_card = (
         f"图片卡片：{'enabled' if runtime.enable_image_card else 'disabled'}"
-        f"（超时：{runtime.image_render_timeout_seconds}s）"
+        f"（超时：{runtime.image_render_timeout_seconds}s"
+        f"，单图事件数：{runtime.image_card_max_items}"
+        f"，每窗口上限：{runtime.max_images_per_delivery}"
+        f"，发送间隔：{runtime.image_send_interval_seconds}s）"
+    )
+    drain_status = (
+        f"出站箱调度：{drain_scheduler_state}"
+        f"（上次尝试：{drain_last_attempt or '无'}，"
+        f"上次成功：{drain_last_success or '无'}，"
+        f"错误：{drain_error}）"
     )
     return "\n".join(
         (
             "AstrBot 插件市场观察器",
             f"- 配置启用：{'enabled' if runtime.enabled else 'disabled'}",
-            f"- 自动调度：{scheduler_state}",
+            f"- 自动检查调度：{scheduler_state}",
+            f"- {drain_status}",
             f"- 服务忙碌：{'yes' if service_busy else 'no'}",
             f"- 轮询间隔：{runtime.poll_interval_minutes} 分钟",
-            f"- 调度上次尝试：{scheduler_last_attempt or '无'}",
-            f"- 调度上次成功：{scheduler_last_success or '无'}",
-            f"- 调度错误：{scheduler_error}",
+            f"- 检查调度上次尝试：{scheduler_last_attempt or '无'}",
+            f"- 检查调度上次成功：{scheduler_last_success or '无'}",
+            f"- 检查调度错误：{scheduler_error}",
             f"- 状态健康：{health}",
             f"- 状态 schema_version：{schema_version}",
             f"- 插件记录：{plugin_count}",
@@ -67,6 +83,8 @@ def format_status(
             f"- GitHub 缓存：{github_cache_count}",
             f"- {image_card}",
             f"- 待投递目标：{pending}",
+            f"- 窗口节流目标：{throttled}",
+            f"- 下次出站箱投递：{next_drain}",
             f"- 永久失败目标：{exhausted}",
             last_text,
         )

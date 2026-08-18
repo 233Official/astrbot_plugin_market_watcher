@@ -26,10 +26,13 @@ if __package__:
     from .market_watcher.outbox import (
         count_exhausted,
         count_pending,
+        count_throttled,
         merge_targets,
+        next_outbox_due_at,
+        parse_utc,
         validate_targets,
     )
-    from .market_watcher.scheduler import FixedDelayScheduler
+    from .market_watcher.scheduler import DrainScheduler, FixedDelayScheduler
     from .market_watcher.service import MarketWatcherService
     from .market_watcher.sources.github_search import GitHubSearchFetcher
     from .market_watcher.sources.issues import IssuesFetcher
@@ -57,10 +60,13 @@ else:
     from market_watcher.outbox import (
         count_exhausted,
         count_pending,
+        count_throttled,
         merge_targets,
+        next_outbox_due_at,
+        parse_utc,
         validate_targets,
     )
-    from market_watcher.scheduler import FixedDelayScheduler
+    from market_watcher.scheduler import DrainScheduler, FixedDelayScheduler
     from market_watcher.service import MarketWatcherService
     from market_watcher.sources.github_search import GitHubSearchFetcher
     from market_watcher.sources.issues import IssuesFetcher
@@ -91,6 +97,7 @@ class MarketWatcherPlugin(Star):
         self._ai_intro: AiIntroService | None = None
         self._service: MarketWatcherService | None = None
         self._scheduler: FixedDelayScheduler | None = None
+        self._drain_scheduler: DrainScheduler | None = None
         self._runtime_config: RuntimeConfig | None = None
 
     async def initialize(self) -> None:
@@ -195,11 +202,25 @@ class MarketWatcherPlugin(Star):
                 "[MarketWatcher] scheduler error: %s", code
             ),
         )
+        self._drain_scheduler = DrainScheduler(
+            self._drain_callback,
+            on_error=lambda code: logger.error(
+                "[MarketWatcher] drain scheduler error: %s", code
+            ),
+        )
         if runtime.enabled:
             self._scheduler.start()
+        # The drain scheduler always runs: overflow pages must be delivered
+        # even when automatic checking is disabled.
+        self._drain_scheduler.start()
         logger.info("[MarketWatcher] M3 市场检查与 fixed-delay 调度已就绪")
 
     async def terminate(self) -> None:
+        # Stop the drain scheduler first so no new outbox work can be started,
+        # then the check scheduler, and finally the shared service resources.
+        if self._drain_scheduler is not None:
+            await self._drain_scheduler.stop()
+            self._drain_scheduler = None
         if self._scheduler is not None:
             await self._scheduler.stop()
             self._scheduler = None
@@ -211,6 +232,32 @@ class MarketWatcherPlugin(Star):
         self._ai_intro = None
         self._ai_client = None
         logger.info("[MarketWatcher] 插件已停止")
+
+    def _wake_drain(self) -> None:
+        if self._drain_scheduler is not None:
+            self._drain_scheduler.wake()
+
+    async def _drain_callback(self) -> float | None:
+        """Drain due outbox work and report seconds until the next due action."""
+        if self._service is None:
+            return None
+        runtime = self._runtime()
+        await self._service.drain_pending(
+            max_images_per_delivery=runtime.max_images_per_delivery,
+            image_send_interval_seconds=runtime.image_send_interval_seconds,
+        )
+        due = await self._service.next_outbox_due(
+            max_images_per_delivery=runtime.max_images_per_delivery,
+            image_send_interval_seconds=runtime.image_send_interval_seconds,
+        )
+        if due is None:
+            return None
+        now = self._service_clock()
+        try:
+            seconds = (parse_utc(due) - parse_utc(now)).total_seconds()
+        except ValueError:
+            return None
+        return max(0.0, seconds)
 
     @filter.command_group("marketwatch")
     def marketwatch(self) -> None:
@@ -229,6 +276,22 @@ class MarketWatcherPlugin(Star):
             plugin_count = len(state.plugins)
             pending = count_pending(state)
             exhausted = count_exhausted(state)
+            status_now = self._service_clock()
+            throttled = count_throttled(
+                state,
+                now=status_now,
+                max_images_per_delivery=runtime.max_images_per_delivery,
+                image_send_interval_seconds=runtime.image_send_interval_seconds,
+            )
+            next_drain = (
+                next_outbox_due_at(
+                    state,
+                    now=status_now,
+                    max_images_per_delivery=runtime.max_images_per_delivery,
+                    image_send_interval_seconds=runtime.image_send_interval_seconds,
+                )
+                or "无"
+            )
             source_states = (
                 ", ".join(
                     f"{key}:"
@@ -246,12 +309,14 @@ class MarketWatcherPlugin(Star):
                 runtime.push_targets, state.subscriptions
             )
             stored_report = state.last_run
-        except StateError as exc:
+        except (StateError, ValueError) as exc:
             health = type(exc).__name__
             schema_version = "不可用"
             plugin_count = 0
             pending = 0
             exhausted = 0
+            throttled = 0
+            next_drain = "不可用"
             source_states = "不可用"
             github_remaining = None
             github_reset = "未知"
@@ -282,6 +347,21 @@ class MarketWatcherPlugin(Star):
             if scheduler and scheduler.last_error_code
             else "无"
         )
+        drain_scheduler = (
+            self._drain_scheduler.status if self._drain_scheduler else None
+        )
+        drain_scheduler_text = (
+            "running"
+            if self._drain_scheduler is not None
+            and self._drain_scheduler.task is not None
+            and not self._drain_scheduler.task.done()
+            else "stopped"
+        )
+        drain_error = (
+            drain_scheduler.last_error_code
+            if drain_scheduler and drain_scheduler.last_error_code
+            else "无"
+        )
         github_remaining_text = (
             str(github_remaining) if github_remaining is not None else "未知"
         )
@@ -293,6 +373,14 @@ class MarketWatcherPlugin(Star):
                 scheduler_last_attempt=scheduler.last_attempt_at if scheduler else None,
                 scheduler_last_success=scheduler.last_success_at if scheduler else None,
                 scheduler_error=scheduler_error,
+                drain_scheduler_state=drain_scheduler_text,
+                drain_last_attempt=(
+                    drain_scheduler.last_attempt_at if drain_scheduler else None
+                ),
+                drain_last_success=(
+                    drain_scheduler.last_success_at if drain_scheduler else None
+                ),
+                drain_error=drain_error,
                 service_busy=bool(self._service and self._service.lock.locked()),
                 health=health,
                 schema_version=schema_version,
@@ -306,6 +394,8 @@ class MarketWatcherPlugin(Star):
                 effective_target_count=len(effective_targets),
                 pending=pending,
                 exhausted=exhausted,
+                throttled=throttled,
+                next_drain=next_drain,
                 last_text=last_text,
             )
         )
@@ -326,7 +416,11 @@ class MarketWatcherPlugin(Star):
             llm_provider_id=runtime.llm_provider_id,
             provider_origin=event.unified_msg_origin,
             enable_image_card=runtime.enable_image_card,
+            image_card_max_items=runtime.image_card_max_items,
+            max_images_per_delivery=runtime.max_images_per_delivery,
+            image_send_interval_seconds=runtime.image_send_interval_seconds,
         )
+        self._wake_drain()
         yield event.plain_result(report.to_chinese())
 
     @marketwatch.command("test-push")
@@ -477,6 +571,7 @@ class MarketWatcherPlugin(Star):
                 "出站箱诊断准备失败（错误类别：outbox_diagnostic_state_error）。"
             )
             return
+        self._wake_drain()
         yield event.plain_result(
             "出站箱跨重启诊断已准备并进入长期 hold；"
             "必须显式执行 deliver 或 cleanup。\n"
@@ -510,13 +605,18 @@ class MarketWatcherPlugin(Star):
         if self._service is None:
             yield event.plain_result("市场观察器尚未完成初始化。")
             return
+        runtime = self._runtime()
         try:
-            counts = await self._service.deliver_outbox_diagnostic()
+            counts = await self._service.deliver_outbox_diagnostic(
+                max_images_per_delivery=runtime.max_images_per_delivery,
+                image_send_interval_seconds=runtime.image_send_interval_seconds,
+            )
         except (StateError, OSError, ValueError):
             yield event.plain_result(
                 "出站箱诊断投递失败（错误类别：outbox_diagnostic_state_error）。"
             )
             return
+        self._wake_drain()
         yield event.plain_result(
             "已解除诊断 hold 并调用生产 outbox 投递链路；"
             "其他已到期真实 pending 也可能同时处理。\n"
@@ -539,6 +639,7 @@ class MarketWatcherPlugin(Star):
                 "出站箱诊断清理失败（错误类别：outbox_diagnostic_state_error）。"
             )
             return
+        self._wake_drain()
         yield event.plain_result(
             f"出站箱诊断记录已清理。\n{_format_outbox_diagnostic_counts(counts)}"
         )
@@ -677,7 +778,7 @@ class MarketWatcherPlugin(Star):
                 error_code="service_not_initialized",
             )
         runtime = self._runtime()
-        return await self._service.check(
+        report = await self._service.check(
             enabled_sources=self._enabled_sources(),
             push_targets=runtime.push_targets,
             max_items_per_push=runtime.max_items_per_push,
@@ -685,7 +786,12 @@ class MarketWatcherPlugin(Star):
             enable_ai_summary=runtime.enable_ai_summary,
             llm_provider_id=runtime.llm_provider_id,
             enable_image_card=runtime.enable_image_card,
+            image_card_max_items=runtime.image_card_max_items,
+            max_images_per_delivery=runtime.max_images_per_delivery,
+            image_send_interval_seconds=runtime.image_send_interval_seconds,
         )
+        self._wake_drain()
+        return report
 
     def _runtime(self) -> RuntimeConfig:
         self._runtime_config = parse_runtime_config(self.config)

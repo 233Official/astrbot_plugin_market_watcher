@@ -153,7 +153,7 @@ class StateStoreTests(unittest.TestCase):
 
     def test_rejects_lower_and_higher_schema_versions(self) -> None:
         self.path.parent.mkdir(parents=True)
-        for version in (0, 2):
+        for version in (0, 3):
             with self.subTest(version=version):
                 value = WatcherState().to_dict()
                 value["schema_version"] = version
@@ -167,7 +167,7 @@ class StateStoreTests(unittest.TestCase):
             with self.subTest(newer_path=newer_path):
                 self.path.unlink(missing_ok=True)
                 self.store.backup_path.unlink(missing_ok=True)
-                newer_path.write_bytes(b'{"schema_version":2,"future":true}\n')
+                newer_path.write_bytes(b'{"schema_version":3,"future":true}\n')
                 other_path = (
                     self.store.backup_path if newer_path == self.path else self.path
                 )
@@ -183,6 +183,18 @@ class StateStoreTests(unittest.TestCase):
                     self.store.backup_path.read_bytes(),
                     before[self.store.backup_path],
                 )
+
+    def test_load_migrates_v1_to_v2_with_empty_image_windows(self) -> None:
+        value = sample_state().to_dict()
+        value["schema_version"] = 1
+        del value["image_delivery_windows"]
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps(value), encoding="utf-8")
+
+        loaded = self.store.load()
+
+        self.assertEqual(loaded.schema_version, 2)
+        self.assertEqual(loaded.image_delivery_windows, {})
 
     def test_snapshot_source_kind_must_match_outer_source(self) -> None:
         value = sample_state().to_dict()

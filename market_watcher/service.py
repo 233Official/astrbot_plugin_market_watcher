@@ -28,9 +28,11 @@ from .outbox import (
     Notifier,
     count_exhausted,
     count_pending,
+    count_throttled,
     create_batches,
     deliver_pending,
     merge_targets,
+    next_outbox_due_at,
     validate_targets,
 )
 from .state import StateError
@@ -106,7 +108,70 @@ class MarketWatcherService:
         async with self.lock:
             return _diagnostic_counts(self.store.load())
 
-    async def deliver_outbox_diagnostic(self) -> dict[str, int]:
+    async def drain_pending(
+        self,
+        *,
+        max_images_per_delivery: int = 2,
+        image_send_interval_seconds: int = 2,
+    ) -> dict[str, Any]:
+        """Deliver all currently due outbox work without fetching or detecting.
+
+        Shares the same service lock as ``check`` so a running check and the
+        background drain can never mutate state concurrently.  The returned
+        stats contain no target identifiers.
+        """
+        async with self.lock:
+            state = self.store.load()
+            sent, pending = await deliver_pending(
+                state,
+                self.store,
+                self.notifier,
+                now=self.clock(),
+                clock=self.clock,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
+            )
+            now = self.clock()
+            throttled = count_throttled(
+                state,
+                now=now,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
+            )
+            return {
+                "sent": sent,
+                "pending": pending,
+                "throttled": throttled,
+                "next_due_at": next_outbox_due_at(
+                    state,
+                    now=now,
+                    max_images_per_delivery=max_images_per_delivery,
+                    image_send_interval_seconds=image_send_interval_seconds,
+                ),
+            }
+
+    async def next_outbox_due(
+        self,
+        *,
+        max_images_per_delivery: int = 2,
+        image_send_interval_seconds: int = 2,
+    ) -> str | None:
+        """Return the earliest UTC time outbox work can proceed (or None)."""
+        async with self.lock:
+            state = self.store.load()
+            return next_outbox_due_at(
+                state,
+                now=self.clock(),
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
+            )
+
+    async def deliver_outbox_diagnostic(
+        self,
+        *,
+        max_images_per_delivery: int = 2,
+        image_send_interval_seconds: int = 2,
+    ) -> dict[str, int]:
         async with self.lock:
             state = self.store.load()
             released = 0
@@ -128,6 +193,8 @@ class MarketWatcherService:
                 self.notifier,
                 now=self.clock(),
                 clock=self.clock,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
             )
             result = _diagnostic_counts(state)
             result["released"] = released
@@ -160,6 +227,9 @@ class MarketWatcherService:
         llm_provider_id: str = "",
         provider_origin: str | None = None,
         enable_image_card: bool = False,
+        image_card_max_items: int = 15,
+        max_images_per_delivery: int = 2,
+        image_send_interval_seconds: int = 2,
     ) -> RunReport:
         if self.lock.locked():
             report = RunReport(
@@ -183,6 +253,9 @@ class MarketWatcherService:
                 provider_origin,
                 overall_started,
                 enable_image_card=enable_image_card,
+                image_card_max_items=image_card_max_items,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
             )
             if report.phase_durations_ms["overall"] == 0:
                 self._record_phase(report, "overall", overall_started)
@@ -202,6 +275,9 @@ class MarketWatcherService:
         provider_origin: str | None,
         overall_started: float,
         enable_image_card: bool = False,
+        image_card_max_items: int = 15,
+        max_images_per_delivery: int = 2,
+        image_send_interval_seconds: int = 2,
     ) -> RunReport:
         report = RunReport(status="running", started_at=self.clock())
         report.run_id = _run_id(report.started_at)
@@ -226,7 +302,13 @@ class MarketWatcherService:
         try:
             deliver_started = self.monotonic()
             sent, _ = await deliver_pending(
-                state, self.store, self.notifier, now=self.clock(), clock=self.clock
+                state,
+                self.store,
+                self.notifier,
+                now=self.clock(),
+                clock=self.clock,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
             )
             self._record_phase(report, "deliver", deliver_started)
         except (StateError, OSError, ValueError):
@@ -439,6 +521,7 @@ class MarketWatcherService:
             created_at=self.clock(),
             intro=intro,
             enable_image_card=enable_image_card,
+            image_card_max_items=image_card_max_items,
         )
         inserted = 0
         for batch in batches:
@@ -471,7 +554,13 @@ class MarketWatcherService:
         try:
             deliver_started = self.monotonic()
             sent, _ = await deliver_pending(
-                state, self.store, self.notifier, now=self.clock(), clock=self.clock
+                state,
+                self.store,
+                self.notifier,
+                now=self.clock(),
+                clock=self.clock,
+                max_images_per_delivery=max_images_per_delivery,
+                image_send_interval_seconds=image_send_interval_seconds,
             )
             self._record_phase(report, "deliver", deliver_started)
         except (StateError, OSError, ValueError):

@@ -190,7 +190,7 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(len(batches), 1)
         self.assertEqual(batches[0].card_payload["item_count"], 5)  # type: ignore[index]
 
-    def test_image_card_6_events_two_batches(self) -> None:
+    def test_image_card_6_events_single_two_column_batch(self) -> None:
         batches = create_batches(
             self._events(6),
             ["umo"],
@@ -198,9 +198,9 @@ class PaginationTests(unittest.TestCase):
             created_at=NOW,
             enable_image_card=True,
         )
-        self.assertEqual(len(batches), 2)
-        self.assertEqual(batches[0].card_payload["item_count"], 5)  # type: ignore[index]
-        self.assertEqual(batches[1].card_payload["item_count"], 1)  # type: ignore[index]
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0].card_payload["item_count"], 6)  # type: ignore[index]
+        self.assertEqual(batches[0].card_payload["layout_columns"], 2)  # type: ignore[index]
 
     def test_image_card_disabled_uses_max_items_per_push(self) -> None:
         batches = create_batches(
@@ -571,6 +571,7 @@ class AstrBotNotifierTests(unittest.IsolatedAsyncioTestCase):
         opts = captured.get("options")
         self.assertIsNotNone(opts)
         self.assertEqual(opts["type"], "png")  # type: ignore[index]
+        self.assertEqual(opts["viewport_width"], 760)  # type: ignore[index]
 
     # ------------------------------------------------------------------
     # 5. injected image_loader is used

@@ -1,4 +1,9 @@
-"""Strict M1 domain and schema-version 1 persistence models."""
+"""Strict M1 domain and schema-version 2 persistence models.
+
+Schema v2 adds per-target image delivery window accounting
+(``image_delivery_windows``) while keeping v1 fields unchanged.  v1 state is
+migrated explicitly (empty window map); unknown fields are still rejected.
+"""
 
 from __future__ import annotations
 
@@ -466,6 +471,51 @@ class DeliveryTargetState:
 
 
 @dataclass(slots=True)
+class ImageDeliveryWindow:
+    """Per-target image send window accounting for throttling.
+
+    A window is 60 seconds long; each real image send attempt reserves one
+    slot before ``notifier.send()``.  Quota skips never mutate this state.
+    """
+
+    window_started_at: str | None = None
+    used_attempts: int = 0
+    last_send_attempt_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "last_send_attempt_at": self.last_send_attempt_at,
+            "used_attempts": self.used_attempts,
+            "window_started_at": self.window_started_at,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Any, path: str) -> ImageDeliveryWindow:
+        data = _dict(value, path)
+        _required(
+            data,
+            {
+                "window_started_at",
+                "used_attempts",
+                "last_send_attempt_at",
+            },
+            path,
+        )
+        used_attempts = _int(data["used_attempts"], f"{path}.used_attempts")
+        if used_attempts < 0:
+            raise ModelValidationError(f"{path}.used_attempts must not be negative")
+        return cls(
+            window_started_at=_optional_str(
+                data["window_started_at"], f"{path}.window_started_at"
+            ),
+            used_attempts=used_attempts,
+            last_send_attempt_at=_optional_str(
+                data["last_send_attempt_at"], f"{path}.last_send_attempt_at"
+            ),
+        )
+
+
+@dataclass(slots=True)
 class DeliveryBatch:
     batch_id: str
     event_ids: tuple[str, ...]
@@ -838,7 +888,7 @@ class GitHubState:
 
 @dataclass(slots=True)
 class WatcherState:
-    schema_version: int = 1
+    schema_version: int = 2
     updated_at: str | None = None
     subscriptions: list[str] = field(default_factory=list)
     sources: dict[str, SourceState] = field(default_factory=dict)
@@ -846,6 +896,7 @@ class WatcherState:
     id_aliases: dict[str, str] = field(default_factory=dict)
     github: GitHubState = field(default_factory=GitHubState)
     outbox: dict[str, DeliveryBatch] = field(default_factory=dict)
+    image_delivery_windows: dict[str, ImageDeliveryWindow] = field(default_factory=dict)
     last_run: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -856,6 +907,10 @@ class WatcherState:
             "github": self.github.to_dict(),
             "id_aliases": {
                 key: self.id_aliases[key] for key in sorted(self.id_aliases)
+            },
+            "image_delivery_windows": {
+                key: self.image_delivery_windows[key].to_dict()
+                for key in sorted(self.image_delivery_windows)
             },
             "last_run": self.last_run,
             "outbox": {key: self.outbox[key].to_dict() for key in sorted(self.outbox)},
@@ -873,6 +928,18 @@ class WatcherState:
     @classmethod
     def from_dict(cls, value: Any) -> WatcherState:
         data = _dict(value, "state")
+        version = _int(data["schema_version"], "state.schema_version")
+        if version == 1:
+            # Explicit v1 -> v2 migration: add an empty image window map and
+            # bump the schema version. All other v1 fields are validated as v2.
+            data = {
+                **data,
+                "schema_version": 2,
+                "image_delivery_windows": {},
+            }
+            version = 2
+        if version != 2:
+            raise ModelValidationError(f"unsupported state schema version: {version!r}")
         fields = {
             "schema_version",
             "updated_at",
@@ -882,6 +949,7 @@ class WatcherState:
             "id_aliases",
             "github",
             "outbox",
+            "image_delivery_windows",
             "last_run",
         }
         if "github" not in data and "github_cache" in data:
@@ -900,6 +968,7 @@ class WatcherState:
         plugins = _dict(data["plugins"], "state.plugins")
         aliases = _dict(data["id_aliases"], "state.id_aliases")
         outbox = _dict(data["outbox"], "state.outbox")
+        windows = _dict(data["image_delivery_windows"], "state.image_delivery_windows")
         parsed_sources = {
             _str(key, "state.sources key"): SourceState.from_dict(
                 item, f"state.sources[{key!r}]"
@@ -917,6 +986,14 @@ class WatcherState:
                 item, f"state.outbox[{key!r}]"
             )
             for key, item in outbox.items()
+        }
+        parsed_windows = {
+            _str(
+                key, "state.image_delivery_windows key"
+            ): ImageDeliveryWindow.from_dict(
+                item, f"state.image_delivery_windows[{key!r}]"
+            )
+            for key, item in windows.items()
         }
         for key, source in parsed_sources.items():
             try:
@@ -957,6 +1034,7 @@ class WatcherState:
             },
             github=GitHubState.from_dict(data["github"], "state.github"),
             outbox=parsed_outbox,
+            image_delivery_windows=parsed_windows,
             last_run=_dict(data["last_run"], "state.last_run"),
         )
 
