@@ -33,20 +33,9 @@
     "hint": "可选 AI 导语使用的 AstrBot Provider；留空时手动检查使用当前会话默认 Provider，自动检查使用首个有效推送目标的默认 Provider。"
   },
   "source_market_api": {
-    "description": "启用市场 API/plugins.json 数据源",
+    "description": "启用 AstrBot Cloud 市场（唯一市场事实来源，无旧目录回退）",
     "type": "bool",
     "default": true
-  },
-  "source_collection_issues": {
-    "description": "启用 AstrBot 插件 Collection Issues 数据源",
-    "type": "bool",
-    "default": true
-  },
-  "source_plugin_publish_issues": {
-    "description": "启用 AstrBot 主仓 plugin-publish Issues 兼容数据源",
-    "type": "bool",
-    "default": false,
-    "hint": "官方发布指南已称该入口废弃，仅用于历史和残留信号兼容。"
   },
   "source_github_discovery": {
     "description": "启用 GitHub astrbot_plugin_* 全局发现",

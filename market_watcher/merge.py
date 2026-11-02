@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 
 from .models import (
     PluginRecord,
@@ -18,6 +19,7 @@ SOURCE_PRIORITY = {
     SourceKind.LEGACY_PUBLISH_ISSUE: 2,
     SourceKind.GITHUB_DISCOVERY: 3,
 }
+SUPPORTED_SOURCES = frozenset({SourceKind.MARKET, SourceKind.GITHUB_DISCOVERY})
 MERGED_FIELDS = (
     "name",
     "repo_url",
@@ -45,16 +47,20 @@ def merge_sources(
     previous_plugins: dict[str, PluginRecord] | None = None,
     aliases: dict[str, str] | None = None,
 ) -> dict[str, PluginRecord]:
-    previous_plugins = previous_plugins or {}
     aliases = aliases or {}
+    previous_plugins = _resolve_previous(previous_plugins or {}, aliases)
     grouped: dict[str, list[SourceObservation]] = defaultdict(list)
     for state in sources.values():
         for observation in state.observations.values():
+            if observation.source_kind not in SUPPORTED_SOURCES:
+                continue
             grouped[_resolve_alias(observation.canonical_id, aliases)].append(
                 observation
             )
 
-    result: dict[str, PluginRecord] = {}
+    # A smaller successful feed is not evidence of removal. Keep the last known
+    # values and identity so a later restored entry is compared, not rediscovered.
+    result = dict(previous_plugins)
     for canonical_id, observations in sorted(grouped.items()):
         observations.sort(
             key=lambda item: (
@@ -111,6 +117,21 @@ def merge_sources(
     return result
 
 
+def _resolve_previous(
+    previous: dict[str, PluginRecord], aliases: dict[str, str]
+) -> dict[str, PluginRecord]:
+    result: dict[str, PluginRecord] = {}
+    for canonical_id, record in sorted(previous.items()):
+        resolved = _resolve_alias(canonical_id, aliases)
+        if resolved == canonical_id:
+            result[resolved] = record
+        elif resolved not in result and resolved not in previous:
+            migrated = replace(record, canonical_id=resolved)
+            migrated.content_hash = migrated.compute_content_hash()
+            result[resolved] = migrated
+    return result
+
+
 def _select_field(
     field_name: str,
     observations: list[SourceObservation],
@@ -119,7 +140,22 @@ def _select_field(
     candidates: list[tuple[int, object, SourceObservation]] = []
     for observation in observations:
         value = getattr(observation, field_name)
-        if _is_empty(value):
+        authoritative_empty = (
+            observation.source_kind is SourceKind.MARKET
+            and not observation.sparse
+            and field_name
+            in {
+                "display_name",
+                "description",
+                "author",
+                "version",
+                "astrbot_version",
+                "platforms",
+                "tags",
+                "market_status",
+            }
+        )
+        if _is_empty(value) and not authoritative_empty:
             continue
         candidates.append(
             (SOURCE_PRIORITY[observation.source_kind], value, observation)
@@ -127,7 +163,7 @@ def _select_field(
     candidates.sort(key=lambda item: (item[0], item[2].source_record_id))
     if not candidates:
         return None
-    if previous and not _is_empty(getattr(previous, field_name)):
+    if previous:
         old_evidence = previous.field_sources.get(field_name)
         old_priority = (
             SOURCE_PRIORITY[old_evidence.source_kind]

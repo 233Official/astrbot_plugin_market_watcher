@@ -1,5 +1,12 @@
 {
+  "$meta": {
+    "schema_version": 1,
+    "name": "AstrBot Official Plugin Market",
+    "version": "2026-11-02T03:09:07Z",
+    "updated_at": "2026-11-02T03:09:07Z"
+  },
   "demo": {
+    "name": "astrbot_plugin_demo",
     "repo": "https://github.com/Example/AstrBot_Plugin_Demo.git?ref=market",
     "display_name": "演示插件",
     "desc": "市场中的演示插件",
@@ -9,6 +16,7 @@
     "support_platforms": ["aiocqhttp", "telegram"],
     "tags": ["工具"],
     "updated_at": "2026-07-20T00:00:00Z",
-    "stars": 12
+    "stars": 12,
+    "download_count": 1500
   }
 }

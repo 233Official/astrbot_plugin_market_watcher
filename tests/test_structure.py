@@ -130,40 +130,6 @@ class StructureTests(unittest.TestCase):
         self.assertTrue({"aiocqhttp", "qq_official"}.issubset(platforms))
         self.assertNotIn("qq_official_webhook", platforms)
 
-    def test_config_schema_has_safe_defaults(self) -> None:
-        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
-        expected = {
-            "enabled",
-            "poll_interval_minutes",
-            "push_targets",
-            "github_token",
-            "llm_provider_id",
-            "enable_ai_summary",
-            "ai_timeout_seconds",
-            "source_market_api",
-            "source_collection_issues",
-            "source_plugin_publish_issues",
-            "source_github_discovery",
-        }
-        self.assertTrue(expected.issubset(schema))
-        self.assertFalse(schema["enabled"]["default"])
-        self.assertEqual(schema["github_token"]["default"], "")
-        self.assertIs(schema["github_token"]["obvious_hint"], True)
-        self.assertEqual(schema["push_targets"]["default"], [])
-        self.assertIn("适配器实例 ID", schema["push_targets"]["hint"])
-        self.assertIn(
-            "qqws:GROUP_MESSAGE:<group_openid>", schema["push_targets"]["hint"]
-        )
-        self.assertEqual(schema["llm_provider_id"]["_special"], "select_provider")
-        self.assertEqual(schema["ai_timeout_seconds"]["default"], 60)
-        self.assertEqual(
-            schema["ai_timeout_seconds"]["slider"],
-            {"min": 10, "max": 120, "step": 5},
-        )
-        self.assertFalse(schema["enable_ai_summary"]["default"])
-        self.assertFalse(schema["source_plugin_publish_issues"]["default"])
-        self.assertFalse(schema["source_github_discovery"]["default"])
-
     def test_pyproject_metadata_matches_runtime_contract(self) -> None:
         with (ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)

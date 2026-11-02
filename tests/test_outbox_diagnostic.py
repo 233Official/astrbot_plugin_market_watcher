@@ -13,10 +13,9 @@ from market_watcher.models import (
     DeliveryTargetState,
     WatcherState,
 )
-from market_watcher.outbox import deliver_pending
+from market_watcher.outbox import OUTBOX_DIAGNOSTIC_PREFIX, deliver_pending
 from market_watcher.service import (
     OUTBOX_DIAGNOSTIC_HOLD,
-    OUTBOX_DIAGNOSTIC_PREFIX,
     MarketWatcherService,
 )
 from market_watcher.state import JsonStateStore
@@ -175,10 +174,7 @@ class OutboxDiagnosticServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {call[0] for call in notifier.calls}, {"real-target", DIAGNOSTIC_ORIGIN}
         )
-        self.assertIs(
-            store.state.outbox["batch:real"].targets["real-target"].status,
-            DeliveryStatus.SENT,
-        )
+        self.assertNotIn("batch:real", store.state.outbox)
 
     async def test_cleanup_only_removes_diagnostics_and_is_idempotent(self):
         state = WatcherState(outbox={"batch:real": real_batch()})

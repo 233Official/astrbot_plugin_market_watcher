@@ -252,6 +252,20 @@ class AiBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("【实质更新】Demo", batch.message)
             self.assertIn("版本：2.0.0", batch.message)
 
+    def test_cloud_summary_uses_current_sources_and_field_labels(self):
+        from market_watcher.summary import SOURCE_NAMES
+
+        self.assertEqual(
+            set(SOURCE_NAMES), {SourceKind.MARKET, SourceKind.GITHUB_DISCOVERY}
+        )
+        item = event()
+        item.changed_fields = ("name", "tags")
+        text = render_summary([item], 1, 1)
+        self.assertIn("AstrBot 市场", text)
+        self.assertIn("插件名", text)
+        self.assertIn("标签", text)
+        self.assertNotIn("Issue", text)
+
     def test_overflowing_intro_is_dropped_without_truncating_facts(self):
         events = []
         for index in range(200):
@@ -352,6 +366,10 @@ class AiOrchestrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_ai_failure_still_sends_deterministic_facts_and_logs_are_safe(self):
         old = observation("1.0.0")
         current = observation("2.0.0")
+        current.fetched_from = "https://secret.endpoint.invalid/?token=CANARY"
+        current.raw_excerpt = {
+            "message": "secret raw excerpt CANARY_RAW_EXCERPT",
+        }
         old_source = SourceState(
             baseline_established=True,
             complete=True,
@@ -373,7 +391,7 @@ class AiOrchestrationTests(unittest.IsolatedAsyncioTestCase):
                         True,
                         True,
                         observations=[current],
-                        endpoint="https://example.invalid/api",
+                        endpoint="https://secret.endpoint.invalid/api",
                         pages_fetched=1,
                     )
                 )
@@ -406,6 +424,11 @@ class AiOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("CANARY_SECRET", serialized_logs)
         self.assertNotIn("CANARY_TARGET", serialized_logs)
         self.assertNotIn("provider-secret", serialized_logs)
+        self.assertNotIn("secret.endpoint.invalid", serialized_logs)
+        self.assertNotIn("CANARY_RAW_EXCERPT", serialized_logs)
+        self.assertTrue(
+            all(item["source_errors"] == "market:none" for item in observations)
+        )
         self.assertTrue(
             all(
                 set(item)
@@ -417,6 +440,7 @@ class AiOrchestrationTests(unittest.IsolatedAsyncioTestCase):
                     "sources_succeeded",
                     "sources_failed",
                     "error_code",
+                    "source_errors",
                 }
                 for item in observations
             )

@@ -6,20 +6,20 @@ from collections import deque
 from copy import deepcopy
 from pathlib import Path
 
+from market_watcher.detect import detect_changes
 from market_watcher.http import HttpResponse
+from market_watcher.merge import merge_sources
 from market_watcher.models import (
     EndpointSnapshot,
-    PluginRecord,
-    SourceEvidence,
     SourceKind,
     SourceState,
 )
+from market_watcher.normalize import fallback_canonical_id
 from market_watcher.sources.github_search import (
     SEARCH_ENDPOINT,
     GitHubSearchFetcher,
 )
-from market_watcher.sources.issues import COLLECTION_ISSUES_URL, IssuesFetcher
-from market_watcher.sources.market import MARKET_RAW_URL, MarketFetcher
+from market_watcher.sources.market import MARKET_API_URL, MarketFetcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = "2026-07-20T12:00:00Z"
@@ -87,237 +87,188 @@ def repo_item(index: int) -> dict:
 
 
 class MarketSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_market_parses_fields_and_injected_observed_at(self) -> None:
+    async def test_cloud_parsing_excludes_meta_and_uses_repo_identity(self) -> None:
         http = FakeHttpClient(
-            [
-                response(
-                    200,
-                    fixture("market_api.json"),
-                    headers={"Last-Modified": "Sun, 20 Jul 2026 00:00:00 GMT"},
-                )
-            ]
+            [response(200, fixture("market_api.json"), headers={"ETag": '"cloud"'})]
         )
         result = await MarketFetcher(http, clock=lambda: NOW).fetch()
         self.assertTrue(result.success and result.complete)
+        self.assertEqual(http.calls, [(MARKET_API_URL, {})])
+        self.assertEqual(result.endpoint, MARKET_API_URL)
+        self.assertEqual(result.records_received, 1)
+        self.assertEqual(result.records_rejected, 0)
         observation = result.observations[0]
         self.assertEqual(observation.observed_at, NOW)
+        self.assertEqual(observation.canonical_id, "github:example/astrbot_plugin_demo")
         self.assertEqual(observation.repo_owner, "example")
         self.assertEqual(observation.repo_name, "astrbot_plugin_demo")
+        self.assertEqual(observation.version, "1.2.0")
+        self.assertEqual(observation.tags, ("工具",))
         self.assertEqual(observation.stars, 12)
+        self.assertFalse(observation.sparse)
 
-    async def test_incomplete_primary_uses_sparse_raw_fallback(self) -> None:
-        http = FakeHttpClient(
-            [
-                response(200, fixture("market_incomplete.json")),
-                response(200, fixture("raw_plugins.json"), headers={"ETag": '"raw"'}),
-            ]
-        )
-        result = await MarketFetcher(http, clock=lambda: NOW).fetch()
-        self.assertTrue(result.success and result.complete)
-        self.assertTrue(result.from_fallback)
-        self.assertEqual(result.endpoint, MARKET_RAW_URL)
-        self.assertEqual(result.etag, '"raw"')
-        observation = result.observations[0]
-        self.assertTrue(observation.sparse)
-        self.assertIsNone(observation.version)
-        self.assertIsNone(observation.astrbot_version)
+    async def test_no_fallback_for_timeout_http_or_invalid_payload(self) -> None:
+        failures = [
+            TimeoutError(),
+            response(503),
+            HttpResponse(200, body=b"not-json"),
+            response(200, fixture("market_incomplete.json")),
+            response(200, {"$meta": {"name": "Market"}}),
+            response(200, {"broken": {}}),
+            response(200, {"broken": {"stars": 100}}),
+            response(200, []),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                http = FakeHttpClient([failure])
+                result = await MarketFetcher(http, clock=lambda: NOW).fetch()
+                self.assertFalse(result.complete)
+                self.assertEqual(len(http.calls), 1)
+                self.assertEqual(result.endpoint, MARKET_API_URL)
 
-    async def test_304_isolated_by_endpoint(self) -> None:
-        seed_http = FakeHttpClient(
-            [response(503), response(200, fixture("raw_plugins.json"))]
+    async def test_slug_fallback_identity_without_github_repository(self) -> None:
+        result = await MarketFetcher(
+            FakeHttpClient(
+                [response(200, {"author/plugin": {"name": "Plugin", "desc": "Useful"}})]
+            ),
+            clock=lambda: NOW,
+        ).fetch()
+        self.assertTrue(result.complete)
+        self.assertEqual(
+            result.observations[0].canonical_id,
+            fallback_canonical_id(SourceKind.MARKET, "author/plugin"),
         )
-        seed = await MarketFetcher(seed_http, clock=lambda: NOW).fetch()
-        previous = source_state(MARKET_RAW_URL, seed.observations, etag='"raw-old"')
-        http = FakeHttpClient([response(304), response(304)])
+        self.assertIsNone(result.observations[0].repo_url)
+
+    async def test_304_reuses_only_cloud_snapshot(self) -> None:
+        seed = await MarketFetcher(
+            FakeHttpClient([response(200, fixture("market_api.json"))]),
+            clock=lambda: NOW,
+        ).fetch()
+        previous = source_state(MARKET_API_URL, seed.observations, etag='"cloud-old"')
+        http = FakeHttpClient([response(304)])
         result = await MarketFetcher(http, clock=lambda: "later").fetch(previous)
         self.assertTrue(result.success and result.not_modified)
-        self.assertTrue(result.from_fallback)
-        self.assertEqual(result.endpoint, MARKET_RAW_URL)
-        self.assertNotIn("If-None-Match", http.calls[0][1])
-        self.assertEqual(http.calls[1][1]["If-None-Match"], '"raw-old"')
+        self.assertEqual(result.observations, seed.observations)
+        self.assertEqual(
+            http.calls, [(MARKET_API_URL, {"If-None-Match": '"cloud-old"'})]
+        )
 
-    async def test_observation_hash_can_track_star_changes(self) -> None:
+        previous = source_state("https://old-market.invalid/plugins", seed.observations)
+        http = FakeHttpClient([response(304)])
+        result = await MarketFetcher(http, clock=lambda: NOW).fetch(previous)
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "not_modified_without_endpoint_snapshot")
+        self.assertEqual(http.calls, [(MARKET_API_URL, {})])
+
+        result = await MarketFetcher(
+            FakeHttpClient([response(304)]), clock=lambda: NOW
+        ).fetch(source_state(MARKET_API_URL, []))
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "no_valid_plugins")
+
+    async def test_meta_counts_and_times_never_change_plugin_content(self) -> None:
         first_payload = fixture("market_api.json")
         second_payload = deepcopy(first_payload)
-        second_payload["demo"]["stars"] = 999
-        first = await MarketFetcher(
-            FakeHttpClient([response(200, first_payload)]), clock=lambda: "first"
-        ).fetch()
-        second = await MarketFetcher(
-            FakeHttpClient([response(200, second_payload)]), clock=lambda: "second"
-        ).fetch()
-        self.assertNotEqual(
-            first.observations[0].observation_hash,
-            second.observations[0].observation_hash,
-        )
-
-    def test_mvp_update_hash_ignores_non_update_fields(self) -> None:
-        market_evidence = SourceEvidence(
-            source_kind=SourceKind.MARKET,
-            source_record_id="demo",
-            source_url="https://example.invalid/market",
-            observed_at=NOW,
-        )
-        issue_evidence = SourceEvidence(
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            source_record_id="1",
-            source_url="https://example.invalid/issue",
-            observed_at=NOW,
-        )
-        base = {
-            "display_name": "Demo",
-            "description": "description",
-            "author": "author",
-            "version": "1.0.0",
-            "repo_url": "https://github.com/example/astrbot_plugin_demo",
-            "astrbot_version": ">=4.24",
-            "platforms": ("aiocqhttp",),
-            "market_status": "listed",
-            "issue_state": None,
-            "issue_labels": (),
-            "archived": False,
-        }
-        first = PluginRecord(
-            canonical_id="github:example/demo",
-            name="old-name",
-            **base,
-            tags=("old",),
-            stars=1,
-            observed_at="first",
-            evidence=(market_evidence, issue_evidence),
-        ).compute_content_hash()
-        second = PluginRecord(
-            canonical_id="github:example/demo",
-            name="new-name",
-            **base,
-            tags=("new",),
+        second_payload["$meta"]["version"] = "later"
+        second_payload["$meta"]["updated_at"] = "later"
+        second_payload["demo"].update(
             stars=999,
-            observed_at="second",
-            evidence=(issue_evidence, market_evidence),
-        ).compute_content_hash()
-        changed = PluginRecord(
-            canonical_id="github:example/demo",
-            name="new-name",
-            **{**base, "version": "2.0.0"},
-        ).compute_content_hash()
-        self.assertEqual(first, second)
-        self.assertNotEqual(first, changed)
+            forks=40,
+            download_count=99999,
+            updated_at="2026-11-01T00:00:00Z",
+        )
+        previous = {}
+        hashes = []
+        for payload in (first_payload, second_payload):
+            result = await MarketFetcher(
+                FakeHttpClient([response(200, payload)]), clock=lambda: NOW
+            ).fetch()
+            self.assertTrue(result.complete)
+            self.assertEqual(result.records_received, 1)
+            self.assertEqual(result.records_rejected, 0)
+            hashes.append(result.observations[0].observation_hash)
+            current = merge_sources(
+                {
+                    SourceKind.MARKET.value: source_state(
+                        MARKET_API_URL, result.observations
+                    )
+                },
+                previous,
+            )
+            if previous:
+                self.assertEqual(detect_changes(previous, current, detected_at=NOW), [])
+            previous = current
+        self.assertEqual(hashes[0], hashes[1])
+
+    async def test_fixed_a_b_shrink_failure_recovery_and_real_changes(self) -> None:
+        snapshot_a = fixture("market_cloud_a.json")
+        snapshot_b = fixture("market_cloud_b.json")
+        changed = deepcopy(snapshot_a)
+        changed["demo"]["desc"] = "实质描述更新"
+        changed["demo"]["version"] = "2.0.0"
+        changed["demo"]["name"] = "renamed-demo"
+        changed["demo"]["support_platforms"] = ["telegram"]
+        changed["demo"]["tags"] = ["新标签"]
+        changed["new"] = {
+            "name": "new",
+            "repo": "https://github.com/example/astrbot_plugin_new",
+            "version": "1.0.0",
+        }
+        http = FakeHttpClient(
+            [
+                response(200, snapshot_a),
+                response(200, snapshot_b),
+                response(200, snapshot_a),
+                TimeoutError(),
+                response(200, {"$meta": {"version": "invalid"}}),
+                HttpResponse(200, body=b"invalid"),
+                response(200, snapshot_a),
+                response(200, changed),
+                response(200, changed),
+            ]
+        )
+        fetcher = MarketFetcher(http, clock=lambda: NOW)
+        previous = {}
+        accepted_source = None
+        for index in range(9):
+            result = await fetcher.fetch(accepted_source)
+            if not result.success or not result.complete:
+                self.assertIn(index, (3, 4, 5))
+                self.assertEqual(len(previous), 2)
+                continue
+            accepted_source = source_state(MARKET_API_URL, result.observations)
+            current = merge_sources(
+                {SourceKind.MARKET.value: accepted_source}, previous
+            )
+            events = detect_changes(previous, current, detected_at=NOW)
+            if index == 0:
+                self.assertEqual(len(events), 2)
+            elif index == 7:
+                self.assertEqual(
+                    [event.kind.value for event in events], ["discovered", "updated"]
+                )
+                self.assertEqual(
+                    events[1].changed_fields,
+                    ("name", "description", "version", "platforms", "tags"),
+                )
+            else:
+                self.assertEqual(events, [])
+            if index == 1:
+                missing_id = "github:example/astrbot_plugin_second"
+                self.assertEqual(current[missing_id], previous[missing_id])
+            previous = current
+        self.assertEqual(len(previous), 3)
+        self.assertEqual(len(http.calls), 9)
 
     async def test_exception_summary_does_not_persist_secret(self) -> None:
         secret = "Bearer CANARY_TOKEN https://user:pass@example.invalid/path"
         result = await MarketFetcher(
-            FakeHttpClient([RuntimeError(secret), RuntimeError(secret)]),
-            clock=lambda: NOW,
+            FakeHttpClient([RuntimeError(secret)]), clock=lambda: NOW
         ).fetch()
         self.assertFalse(result.success)
         self.assertNotIn("CANARY_TOKEN", result.error_summary or "")
         self.assertNotIn("user:pass", result.error_summary or "")
-
-
-class IssueSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_collection_filters_pr_and_parses_json(self) -> None:
-        result = await IssuesFetcher(
-            FakeHttpClient([response(200, fixture("collection_issues.json"))]),
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        self.assertTrue(result.complete)
-        self.assertEqual(len(result.observations), 1)
-        self.assertEqual(result.observations[0].observed_at, NOW)
-
-    async def test_multi_page_snapshot_forces_full_issue_refetch(self) -> None:
-        seed = await IssuesFetcher(
-            FakeHttpClient([response(200, fixture("collection_issues.json"))]),
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        previous = source_state(
-            COLLECTION_ISSUES_URL,
-            seed.observations,
-            pages_fetched=2,
-        )
-        http = FakeHttpClient([response(200, fixture("collection_issues.json"))])
-        result = await IssuesFetcher(
-            http,
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch(previous)
-        self.assertTrue(result.complete)
-        self.assertNotIn("If-None-Match", http.calls[0][1])
-
-    async def test_safe_multi_page_and_newer_duplicate_wins(self) -> None:
-        old = fixture("collection_issues.json")[0]
-        new = deepcopy(old)
-        new["state"] = "closed"
-        new["updated_at"] = "2026-07-21T00:00:00Z"
-        page_two_url = COLLECTION_ISSUES_URL.removesuffix("page=1") + "page=2"
-        http = FakeHttpClient(
-            [
-                response(200, [old], headers={"Link": f'<{page_two_url}>; rel="next"'}),
-                response(200, [new]),
-            ]
-        )
-        result = await IssuesFetcher(
-            http,
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        self.assertTrue(result.complete)
-        self.assertEqual(result.pages_fetched, 2)
-        self.assertEqual(len(result.observations), 1)
-        self.assertEqual(result.observations[0].issue_state, "closed")
-
-    async def test_cross_domain_and_loop_links_are_incomplete(self) -> None:
-        issue = fixture("collection_issues.json")[:1]
-        links = [
-            '<https://evil.invalid/repos/x/y/issues?page=2>; rel="next"',
-            f'<{COLLECTION_ISSUES_URL}>; rel="next"',
-            '<https://api.github.com/repos/Other/Repo/issues?page=2>; rel="next"',
-        ]
-        for link in links:
-            with self.subTest(link=link):
-                result = await IssuesFetcher(
-                    FakeHttpClient([response(200, issue, headers={"Link": link})]),
-                    source_kind=SourceKind.COLLECTION_ISSUE,
-                    clock=lambda: NOW,
-                ).fetch()
-                self.assertFalse(result.complete)
-                self.assertEqual(result.error_code, "unsafe_pagination")
-
-    async def test_all_damaged_issues_are_incomplete(self) -> None:
-        result = await IssuesFetcher(
-            FakeHttpClient([response(200, fixture("issues_all_damaged.json"))]),
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        self.assertFalse(result.complete)
-        self.assertEqual(result.records_rejected, 2)
-
-    async def test_ambiguous_duplicate_is_incomplete(self) -> None:
-        old = fixture("collection_issues.json")[0]
-        changed = deepcopy(old)
-        changed["state"] = "closed"
-        result = await IssuesFetcher(
-            FakeHttpClient([response(200, [old, changed])]),
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        self.assertFalse(result.complete)
-
-    async def test_legacy_requires_label_or_historical_template(self) -> None:
-        invalid = await IssuesFetcher(
-            FakeHttpClient([response(200, fixture("legacy_issue_missing_label.json"))]),
-            source_kind=SourceKind.LEGACY_PUBLISH_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        valid = await IssuesFetcher(
-            FakeHttpClient([response(200, fixture("legacy_issues.json"))]),
-            source_kind=SourceKind.LEGACY_PUBLISH_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
-        self.assertFalse(invalid.complete)
-        self.assertTrue(valid.complete)
-        self.assertEqual(len(valid.observations), 1)
 
 
 class GitHubSearchSourceTests(unittest.IsolatedAsyncioTestCase):

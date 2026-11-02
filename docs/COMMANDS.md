@@ -25,8 +25,13 @@
 | `/marketwatch subscribe` | AstrBot 管理员 | 仅群聊 | 将当前 `event.unified_msg_origin` 幂等加入持久化订阅 |
 | `/marketwatch unsubscribe` | AstrBot 管理员 | 仅群聊 | 幂等移除当前群的持久化订阅 |
 | `/marketwatch subscriptions` | AstrBot 管理员 | 仅群聊 | 仅显示订阅总数和当前群是否已订阅，不列出 UMO |
+| `/marketwatch migration` | AstrBot 管理员 | 无额外限制 | 只返回隔离批次数和 Cloud 静默基线待建立状态，不暴露目标或消息正文 |
+| `/marketwatch migration_release` | AstrBot 管理员 | 无额外限制 | 明确恢复旧隔离批次；保留 sent、attempt、retry、exhausted 状态，成功后唤醒 drain |
+| `/marketwatch migration_discard` | AstrBot 管理员 | 无额外限制 | 明确丢弃隔离批次未发送目标，保留 sent；成功后唤醒 drain |
 
 `check` 与自动检查复用同一服务锁。变化推送目标由 `push_targets` 与持久化群订阅合并后产生。
+
+迁移处置仅影响隔离批次，不清空全部 outbox，不影响新批次或诊断队列；空隔离队列重复处置幂等。升级前停用插件、备份 `state.json` 和 `.bak` 并审查旧队列；启用升级版本后先查看隔离状态，再选择恢复或丢弃。旧市场首次成功完整 Cloud 采集静默重建，失败不消耗迁移。`enabled=false` 不停止投递。
 
 ---
 

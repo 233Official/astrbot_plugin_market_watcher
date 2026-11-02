@@ -11,21 +11,19 @@ MAX_MESSAGE_LENGTH = 3500
 
 SOURCE_NAMES = {
     SourceKind.MARKET: "AstrBot 市场",
-    SourceKind.COLLECTION_ISSUE: "Collection Issue",
-    SourceKind.LEGACY_PUBLISH_ISSUE: "主仓旧 Issue",
     SourceKind.GITHUB_DISCOVERY: "GitHub 补充发现",
 }
 FIELD_NAMES = {
     "display_name": "展示名",
     "description": "用途描述",
+    "name": "插件名",
+    "tags": "标签",
     "author": "作者",
     "version": "版本",
     "repo_url": "仓库地址",
     "astrbot_version": "AstrBot 兼容版本",
     "platforms": "支持平台",
     "market_status": "市场状态",
-    "issue_state": "Issue 状态",
-    "issue_labels": "Issue 标签",
     "archived": "仓库归档状态",
 }
 

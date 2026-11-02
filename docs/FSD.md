@@ -16,16 +16,9 @@
 
 ## 适用范围与 MVP 定义
 
-MVP 必须完成一条可在 AstrBot 中长期运行的闭环：采集四类公开来源，规范化并合并插件记录，按来源静默建立基线，检测“新增”和“实质更新”，生成事实摘要，可选生成 AI 导语，将事件可靠地推送到明确配置的 UMO，并持久化运行状态与待投递批次。
+当前闭环：采集 AstrBot Cloud 市场（唯一市场事实来源），可选 GitHub 独立发现，规范化并合并插件记录，按来源静默建立基线，检测新增和实质更新，生成事实摘要，可选 AI 导语，可靠推送到明确配置的 UMO，持久化状态与待投递批次。
 
-四类来源适配器及其 fixture 均属于 MVP：
-
-- AstrBot 市场 API 或 `plugins.json`。
-- AstrBot 插件 Collection Issues。
-- AstrBot 主仓旧 `plugin-publish` Issues。
-- GitHub `astrbot_plugin_*` 全局发现。
-
-默认只启用市场和 Collection；主仓旧 Issues 与 GitHub 全局发现默认关闭。默认关闭表示运行时成本与可信度策略，不表示移出 MVP。
+默认只启用 Cloud 市场，GitHub 全局发现默认关闭。无旧目录回退，不再采集旧发布流程。#4 的 schema v3 迁移和隔离处置契约见 [DESIGN](DESIGN.md)。
 
 MVP 事件只有：
 
@@ -71,33 +64,14 @@ MVP 事件只有：
 
 | 优先级 | 来源 | 固定 URL/API 形态 | 默认开关 | 可信度与用途 |
 | --- | --- | --- | --- | --- |
-| 1 | 市场 | `GET https://api.soulter.top/astrbot/plugins`；fallback：`GET https://raw.githubusercontent.com/AstrBotDevs/AstrBot_Plugins_Collection/main/plugins.json` | `source_market_api=true` | 已进入市场的主要事实来源 |
-| 2 | Collection Issues | `GET https://api.github.com/repos/AstrBotDevs/AstrBot_Plugins_Collection/issues?state=all&per_page=100&page={n}` | `source_collection_issues=true` | 当前主要发布入口和候选事实来源 |
-| 3 | 主仓旧 Issues | `GET https://api.github.com/repos/AstrBotDevs/AstrBot/issues?state=all&labels=plugin-publish&per_page=100&page={n}` | `source_plugin_publish_issues=false` | 仅兼容历史与残留信号，不证明已收录 |
-| 4 | GitHub 全局发现 | `GET https://api.github.com/search/repositories?q=astrbot_plugin_+in:name&sort=updated&order=desc&per_page=100&page={n}` | `source_github_discovery=false` | 补充发现，不表示官方审核或收录 |
-
-市场 fallback 的准确 raw URL、Collection 仓库名及标签规则是实现前端点验证项。默认决策是保持表中主地址，适配器允许一个代码内置 fallback，不增加配置键，也不阻塞 FSD 完成。
+| 1 | Cloud 市场 | `GET https://cloud.astrbot.app/api/v1/market/plugins.json` | `source_market_api=true` | 唯一市场事实来源 |
+| 2 | GitHub 全局发现 | `GET https://api.github.com/search/repositories?q=astrbot_plugin_+in:name&sort=updated&order=desc&per_page=100&page={n}` | `source_github_discovery=false` | 独立补充发现，不表示官方审核或收录 |
 
 ### 市场来源
 
-- 期望形态：JSON 对象内的插件数组，或顶层插件数组；适配器显式支持经 fixture 固化的两种形态。
-- 完整性：HTTP 成功、内容类型可接受、响应未超大小限制、JSON 可解析、插件数组存在，且记录级解析成功率不低于 95%。空数组只有在端点明确返回有效全量语义时才算成功；否则按失败处理。
-- 分页：若 API 返回分页字段，必须遍历到 `next` 为空或达到内部页数上限；`plugins.json` 视为单页全量。
-- 缓存：优先发送 `If-None-Match`，其次 `If-Modified-Since`；`304` 使用旧来源快照并记为成功且未变化。
-- fallback：主 API 网络失败、5xx、格式不兼容或不完整时尝试一次官方 `plugins.json`；fallback 成功时来源仍记为 `market`，同时记录实际端点。
-
-### Collection Issues
-
-- 采集普通 Issue，不把 Pull Request 混入。
-- 从标题、正文、表单字段、标签和 Issue URL 提取仓库、插件名、作者声明与状态证据。
-- 完整性：从第 1 页开始连续获取，直到返回数量小于 `per_page` 或 `Link` 无 `next`；任何中间页失败则整源不完整，本轮不得以部分结果覆盖旧快照。
-- Issue 的关闭、重开和标签变化可作为 `updated` 的来源字段证据，但摘要必须称为“Collection 提交状态”，不得称为“市场已收录”，除非市场来源同时证明。
-
-### 主仓旧 Issues
-
-- 解析和分页规则与 Collection 相同，但必须限定 `plugin-publish` 标签或经 fixture 验证的历史发布模板。
-- 无论 Issue 状态如何，其事实优先级均低于市场和 Collection。
-- 默认关闭；开启时用于补齐历史仓库地址、名称和来源链接，不得覆盖高优先级来源的非空字段。
+- 单次 GET，无分页或 query；顶层为 `$meta` 与 slug→插件映射，排除 `$meta`。无有效插件按失败处理；仅同端点 snapshot 可供 ETag/Last-Modified 条件 GET 复用。
+- 失败或不完整时保留旧快照，不回退旧目录，不将响应错误解释为市场变化。
+- GitHub 元数据仅补充已有仓库，不增加市场成员。
 
 ### GitHub 全局发现
 
@@ -106,12 +80,12 @@ MVP 事件只有：
 - 当 `incomplete_results=true`、页中断或预算不足时，`FetchResult.complete=false`；已有状态不得被部分结果覆盖。
 - 全局发现只能生成“GitHub 补充发现”证据，不能生成“已进入市场”的表述。
 
-### 来源 fallback 与失败原则
+### 来源失败原则
 
 - 单源失败不阻塞其他来源完成，但失败来源的旧 observations 和基线必须原样保留。
 - 只有 `success=true` 且 `complete=true` 的来源才可替换该来源快照。
 - `success=true, complete=false` 的结果只用于来源健康与诊断统计，不参与合并、事件检测或快照替换。
-- 四类来源均失败时，本轮为失败；不生成事件、不建立基线、不推送普通摘要。
+- 所有启用来源均失败时，本轮为失败；不生成事件、不建立基线、不推送普通摘要。
 
 ---
 
@@ -131,17 +105,15 @@ astrbot_plugin_market_watcher/
 │   ├── detect.py                   # 新增/实质更新纯逻辑
 │   ├── render.py                   # 确定性事实模板
 │   ├── service.py                  # 单轮检查应用编排
-│   ├── state.py                    # schema v1、原子写和 outbox
+│   ├── state.py                    # schema v3、原子写和 outbox
 │   ├── github.py                   # GitHub 客户端、缓存、预算和限流
 │   ├── sources/
 │   │   ├── market.py
-│   │   ├── collection_issues.py
-│   │   ├── legacy_publish_issues.py
 │   │   └── github_discovery.py
 │   ├── ai.py                       # AstrBot LLM Provider 适配
 │   └── delivery.py                 # UMO 分批投递
 └── tests/
-    ├── fixtures/                   # 四类来源及异常响应 fixture
+    ├── fixtures/                   # Cloud、独立搜索及异常响应 fixture
     ├── test_normalize.py
     ├── test_merge_detect.py
     ├── test_state_outbox.py
@@ -161,13 +133,13 @@ astrbot_plugin_market_watcher/
 
 表示某来源中的一条原始观察：
 
-- `source_kind`：`market | collection_issue | legacy_publish_issue | github_discovery`。
-- `source_record_id`：来源内稳定 ID，例如市场条目键、Issue number、GitHub repository ID。
+- `source_kind`：`market | github_discovery`。
+- `source_record_id`：来源内稳定 ID，例如 Cloud 条目 ID、GitHub repository ID。
 - `source_url`：用户可访问的公开证据链接。
 - `fetched_from`：实际请求端点，不得含认证信息。
 - `observed_at`：UTC ISO 8601 时间。
 - `repo_url`、`name`、`display_name`、`description`、`author`、`version`。
-- `astrbot_version`、`platforms`、`market_status`、`issue_state`、`issue_labels`。
+- `astrbot_version`、`platforms`、`market_status`、`tags`。
 - `stars`、`forks`、`archived`、`repo_updated_at`。
 - `content_hash`：对规范化的实质字段计算的 SHA-256。
 - `raw_excerpt`：受限且脱敏的排障字段，序列化后最大 8 KiB。
@@ -251,10 +223,10 @@ source:{source_kind}:{normalized_source_record_id}
 
 ## 跨来源合并与同轮折叠
 
-字段优先级默认是市场 > Collection > 主仓旧 Issues > GitHub 全局发现。合并规则：
+字段优先级默认是 Cloud 市场 > GitHub 全局发现。合并规则：
 
-- 高优先级非空值覆盖低优先级值；空值不得覆盖非空值。
-- GitHub 仓库实时字段 `stars`、`forks`、`archived`、`repo_updated_at` 以仓库 API 缓存为准，不从文本 Issue 覆盖。
+- 高优先级字段覆盖低优先级字段；完整 Cloud 的展示名、描述、作者、版本、兼容性、平台、tags 和市场状态允许清空，稀疏补充来源不能以空值覆盖已有事实。较小快照缺少整个插件时保留其历史身份和最后值。
+- `stars`、`forks`、`archived`、`repo_updated_at` 可来自公开目录或仓库 API 缓存补充，不触发市场实质更新。
 - 所有冲突均保留在 `field_sources` 和 `evidence`，摘要只展示选定值及关键来源。
 - 列表字段先去空白、大小写归一、去重并排序；描述统一换行和首尾空白，但不改写语义。
 - 同一来源出现重复稳定 ID 时，保留最新 `updated_at`；无法判定时拒绝该组并记录解析错误，不随意取第一条。
@@ -291,6 +263,8 @@ source:{source_kind}:{normalized_source_record_id}
 仅以下规范化字段变化触发 `updated`：
 
 - `version`
+- `name`
+- `tags`
 - `display_name`
 - `description`
 - `author`
@@ -298,8 +272,6 @@ source:{source_kind}:{normalized_source_record_id}
 - `astrbot_version`
 - `platforms`
 - `market_status`
-- Collection 或旧 Issue 的 `issue_state`、关键 `issue_labels`，但仅影响对应来源事实
-- `archived`
 
 以下变化本身不触发事件：
 
@@ -317,11 +289,13 @@ Star 最新值仍写入当前记录，并在新增/更新摘要生成时显示�
 
 ## 状态文件与恢复
 
-MVP 使用插件数据目录中的单个 `state.json`，`schema_version` 固定为 `1`。时间均为 UTC ISO 8601，映射键和数组顺序在写入时稳定化。
+当前使用插件数据目录中的单个 `state.json`，`schema_version` 为 `3`。v1/v2 按 #4 契约迁移。时间均为 UTC ISO 8601，映射键和数组顺序在写入时稳定化；下例省略部分字段，完整结构以序列化模型为准。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
+  "legacy_outbox_ids": [],
+  "market_baseline_pending": false,
   "updated_at": "2026-07-20T12:00:00Z",
   "subscriptions": [],
   "last_run": {
@@ -361,12 +335,10 @@ MVP 使用插件数据目录中的单个 `state.json`，`schema_version` 固定�
       "first_seen_at": "2026-07-19T12:00:00Z",
       "last_seen_at": "2026-07-20T12:00:01Z",
       "field_sources": {"version": "market:42"},
-      "evidence": ["market:42", "collection_issue:88"]
+      "evidence": ["market:42"]
     }
   },
-  "id_aliases": {
-    "source:collection_issue:88": "github:owner/astrbot_plugin_demo"
-  },
+  "id_aliases": {},
   "github": {
     "rate_limit": {
       "remaining": 4812,
@@ -408,15 +380,15 @@ MVP 使用插件数据目录中的单个 `state.json`，`schema_version` 固定�
 - 在同目录写入临时文件，UTF-8 编码并完成 flush；可用时执行 `fsync`。
 - 将现有文件保留为 `state.json.bak`，再用原子 replace 替换正式文件。
 - 状态写入必须串行，并受同一轮检查锁保护。
-- schema v1 的 `subscriptions` 是严格字符串数组：每项 trim 后长度 1 至 512，加载时去重并稳定排序；当前 schema 尚未发布，不兼容缺少该字段的宽松旧文件。
+- `subscriptions` 是严格字符串数组：每项 trim 后长度 1 至 512，加载时去重并稳定排序。
 - 写后可重新打开并完成最小 schema 校验；失败则报告并保留可恢复文件。
 
 损坏与版本行为：
 
 - 正式文件 JSON 损坏或缺少必需字段时，尝试读取 `.bak`；备份有效则恢复到内存并进入降级状态，等待下一次安全保存。
 - 正式与备份均损坏时，不静默重建、不推送，`status` 报告 `state_corrupt`，管理员修复或移走文件后才能重新建基线。
-- `schema_version > 1` 时拒绝加载和写入，报告 `state_version_unsupported`，防止旧插件破坏新状态。
-- `schema_version < 1` 不做猜测迁移；MVP 没有更旧正式 schema，应拒绝并提示。
+- `schema_version > 3` 时拒绝加载和写入，报告 `state_version_unsupported`。
+- v1/v2 迁移到 v3：旧市场待 Cloud 静默重建；旧含 pending/failed/exhausted 的生产批次隔离保留、不自动重放。失败不消耗基线迁移，重启幂等；管理员处置仅影响隔离批次并保留 sent。其他未知旧版本拒绝猜测。
 
 ---
 
@@ -443,9 +415,9 @@ MVP 提供 at-least-once 投递，无法保证 exactly-once：进程可能在平
 
 - `github_token` 为空时使用未认证请求；非空时发送 `Authorization: Bearer ...` 和固定 `User-Agent`。
 - GitHub 请求共享并发信号量，最大并发为 `2`。
-- 每轮 GitHub API 请求预算：有 Token `20` 次，无 Token `5` 次。Issue、搜索、仓库元数据和条件请求均计入预算；市场非 GitHub 请求不计入。
+- 每轮 GitHub API 共享请求预算 `40` 次；搜索、仓库元数据和条件请求均计入，Cloud 非 GitHub 请求不计入。
 - 预算按 gateway 接收的逻辑 API 请求计数；同一逻辑请求内部的 HTTP 瞬时重试不在 gateway 重复退避，所有睡眠和轻量抖动仅由 HTTP retry 层执行。
-- 优先级：Collection > 已启用的主仓旧 Issues > 当前事件涉及仓库的元数据/Star > 普通 Star 刷新 > 全局发现后续页。
+- 优先级：当前事件涉及仓库的元数据/Star > 普通 Star 刷新 > 全局发现后续页。
 - 达到预算后停止低优先级请求，返回部分结果或陈旧缓存，不透支下一轮。
 
 ### ETag 与 TTL
@@ -519,7 +491,7 @@ Token 绝不写入日志、状态、消息、AI 输入、异常 repr、fixture �
 
 - 配置启用状态、调度任务状态、当前是否忙碌、轮询间隔。
 - 状态 schema 版本、上次尝试与上次成功时间、上轮结果。
-- 四来源开关、是否已建基线、上次成功、陈旧/错误类别。
+- Cloud 与独立 GitHub 发现开关、是否已建基线、上次成功、陈旧/错误类别。
 - canonical 插件数、GitHub 缓存数、pending/exhausted batch 数。
 - Token 仅显示“已配置/未配置”；目标分别显示配置目标数、群订阅数和本轮有效目标数，不显示完整 UMO 或 Provider ID。
 
@@ -612,14 +584,12 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 
 | 字段 | MVP 语义 |
 | --- | --- |
-| `enabled` | 是否启动自动调度；不影响管理员手动 `check` 是否可用 |
+| `enabled` | 仅自动检查调度；关闭不停止 outbox drain 或管理员手动 `check` |
 | `poll_interval_minutes` | fixed-delay 间隔，默认 30 分钟 |
 | `push_targets` | WebUI 主动推送 UMO；每轮与持久化群订阅合并 |
 | `github_token` | 可选 GitHub Token，仅用于提高 REST API 限额 |
 | `llm_provider_id` | 显式 AstrBot LLM Provider ID；为空时按当前/首个目标解析默认 Provider |
 | `source_market_api` | 启用市场来源，默认开 |
-| `source_collection_issues` | 启用 Collection Issues，默认开 |
-| `source_plugin_publish_issues` | 启用主仓旧 Issues 兼容来源，默认关 |
 | `source_github_discovery` | 启用 GitHub 全局发现，默认关 |
 | `include_star_count` | 是否补充和显示 Star；关闭时不请求且摘要不显示 |
 | `enable_ai_summary` | 是否尝试生成 LLM 导语，默认关 |
@@ -627,7 +597,7 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 | `request_timeout_seconds` | 单次 HTTP 请求超时，默认 15 秒 |
 | `max_items_per_push` | 每个 DeliveryBatch 的最大事件数，默认 10 |
 
-内部常量包括：首次运行延迟 10 秒、GitHub 并发 2、有/无 Token 每轮预算 20/5、Star TTL 6h/24h、搜索最多 2 页、响应上限 5 MiB、投递最多 5 次。LLM 超时已基于线上证据通过 `ai_timeout_seconds` 配置化，不再属于内部常量。
+内部常量包括：首次运行延迟 10 秒、GitHub 并发 2、每轮共享预算 40、Star TTL 6h/24h、搜索最多 2 页、响应上限 5 MiB、投递最多 5 次。LLM 超时通过 `ai_timeout_seconds` 配置。
 
 ---
 
@@ -641,11 +611,10 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 - 字段优先级、空值不覆盖、同轮事件折叠。
 - 新增/实质更新正反例；Star、时间、排序变化产生零事件。
 
-### 四来源 fixture
+### 来源 fixture
 
-- 每类来源至少包含：正常单页、正常多页或等价完整性信号、空/缺字段、重复记录、格式变化和错误响应。
-- 市场主端点与 fallback 各有 fixture。
-- Issues 包含 PR 排除、开放/关闭、标签与表单正文变体。
+- Cloud 包含 `$meta`、slug 映射、字段损坏、无有效插件及条件 GET 同端点缓存场景；无旧目录回退样本。
+- 独立搜索包含分页中断、重复记录、错误响应。
 - GitHub 搜索包含 fork、归档、大小写、`incomplete_results`。
 - fixture 不包含真实 Token 或私人数据。
 
@@ -690,9 +659,9 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 | --- | --- |
 | AstrBot 加载、禁用、启用、重载、卸载无遗留任务 | 生命周期集成测试；终止后任务集合断言；日志无未消费异常 |
 | 无 Token、无推送目标可安全运行且不主动推送 | 未认证 HTTP 模拟；空目标 pusher 调用次数为 0 |
-| 首次成功只建基线，第二次相同输入零事件 | 四来源参数化基线测试；状态快照比较；事件列表为空 |
-| 四类 fixture 可标准化，同仓库只形成一个 canonical 插件 | 四适配器 fixture 测试；合并结果 canonical ID 唯一 |
-| 市场或 Collection 新增、版本变化生成带证据事件 | detect 测试断言 `discovered/updated`、changed_fields 和 evidence |
+| 首次成功只建基线，第二次相同输入零事件 | 按来源参数化基线测试；状态快照比较；事件列表为空 |
+| Cloud 与独立搜索 fixture 可标准化，同仓库只形成一个 canonical 插件 | 适配器 fixture 测试；合并结果 canonical ID 唯一 |
+| 市场新增、实质变化生成带证据事件 | detect 测试断言 `discovered/updated`、changed_fields 和 evidence |
 | 单源失败、空响应、GitHub 限流、LLM 失败按规则降级 | HTTP/LLM 故障注入；旧来源状态不变；事实模板仍可用 |
 | 日志、状态、测试输出和消息无 Token 明文 | canary Token 扫描断言；序列化状态、捕获日志和消息检查 |
 | 静态测试无需安装 AstrBot，另有 AstrBot 集成测试 | 普通 CI 单元测试命令；独立标记的 AstrBot integration suite |
@@ -701,10 +670,10 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 
 ## 里程碑与完成定义
 
-### M1：状态、模型与四来源适配
+### M1：状态、模型与来源适配
 
-- 完成 schema v1 原子状态、领域模型、规范化与 canonical ID。
-- 完成四类来源适配器、分页/完整性、fallback 和 fixture。
+- 当前维护 schema v3 原子状态、领域模型、规范化与 canonical ID。
+- 当前维护 Cloud 单端点和独立搜索适配器、完整性与 fixture，不访问旧目录或发布流程。
 - 完成按来源静默基线与失败不覆盖旧状态。
 
 ### M2：合并、事件与可靠推送
@@ -727,7 +696,7 @@ FSD 仅使用当前 `_conf_schema.json` 已有字段，不新增未实现配置�
 - 完成可选 AstrBot 集成契约；真实管理员权限、UMO 推送与生命周期已于 2026-07-21 完成发布前受控验收。
 - PRD 验收标准全部有自动化或可重复的人工证据。
 
-MVP 完成定义：M1-M4 全部完成，四来源及 fixture 均交付，所有 MVP 事件和可靠投递契约通过测试，阻断项已验证或以明确兼容实现解决，README 与 CHANGELOG 和实际行为一致。该定义已于 2026-07-21 达成并作为 `1.0.0` 基线通过验收；后续功能、缺陷和技术债通过 GitHub Issues 跟踪，设计变化同步到 `docs/DESIGN.md`，不继续扩张本历史规格。
+完成定义：M1-M4 全部完成，适配器及 fixture 交付，事件与可靠投递契约通过验证，README、CHANGELOG 与实际行为一致。1.0.0 的历史验收不证明 #4 Cloud 迁移已线上验收。升级前保持插件停用、备份 state 与 bak 并审查旧队列；部署和真实消息验收需独立授权。
 
 ---
 
@@ -735,7 +704,7 @@ MVP 完成定义：M1-M4 全部完成，四来源及 fixture 均交付，所有 
 
 以下原阻断项已在 2026-07-21 的受控线上验收中关闭，脱敏证据见 `docs/ONLINE_ACCEPTANCE.md`：
 
-- **市场与 Collection 真实端点**：默认来源检查通过，fixture 继续承担字段变体与故障回归。
+- **历史默认来源检查**：当时默认来源检查通过，不代表当前 Cloud 端点或 #4 迁移已在线验收；当前字段与故障回归使用离线 fixture。
 - **AstrBot 管理员命令校验**：管理员允许路径与非管理员拒绝路径均通过。
 - **AstrBot 主动消息 API**：QQ 官方 WebSocket 群 UMO 推送、订阅持久化和 pending outbox 跨完整重启投递通过。
 - **AstrBot LLM Provider API**：默认与显式 Provider 路由通过；10/30 秒超时安全降级，60 秒调用成功。

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
@@ -27,6 +28,7 @@ from .models import (
 from .summary import MAX_MESSAGE_LENGTH, chunk_events, render_summary
 
 MAX_TARGET_LENGTH = 512
+OUTBOX_DIAGNOSTIC_PREFIX = "diagnostic:outbox:"
 
 # Fixed internal image delivery window length in seconds.  Not configurable in
 # the first release per issue #3 design constraints.
@@ -47,6 +49,68 @@ class Notifier(Protocol):
 
 class StateSaver(Protocol):
     def save(self, state: WatcherState) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxCompactionStats:
+    """Non-content counts describing one in-memory outbox compaction."""
+
+    removed_batches: int = 0
+    removed_sent_targets: int = 0
+    removed_exhausted_targets: int = 0
+    normalized_exhausted_targets: int = 0
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.removed_batches or self.normalized_exhausted_targets)
+
+    def __getitem__(self, key: str) -> int:
+        return getattr(self, key)
+
+
+def compact_terminal_batches(state: WatcherState) -> OutboxCompactionStats:
+    """Normalize exhausted targets and remove terminal production batches.
+
+    This helper only mutates the supplied in-memory state.  Diagnostic batches
+    are deliberately retained for the explicit diagnostic cleanup command.
+    """
+    removed_batches = 0
+    removed_sent_targets = 0
+    removed_exhausted_targets = 0
+    normalized_exhausted_targets = 0
+    for batch_id, batch in list(state.outbox.items()):
+        if batch_id in state.legacy_outbox_ids:
+            continue
+        for target_state in batch.targets.values():
+            if (
+                target_state.status is DeliveryStatus.FAILED
+                and target_state.attempts >= batch.max_attempts
+            ):
+                target_state.status = DeliveryStatus.EXHAUSTED
+                target_state.next_retry_at = None
+                normalized_exhausted_targets += 1
+        if batch_id.startswith(OUTBOX_DIAGNOSTIC_PREFIX):
+            continue
+        if all(
+            target_state.status in {DeliveryStatus.SENT, DeliveryStatus.EXHAUSTED}
+            for target_state in batch.targets.values()
+        ):
+            removed_batches += 1
+            removed_sent_targets += sum(
+                target_state.status is DeliveryStatus.SENT
+                for target_state in batch.targets.values()
+            )
+            removed_exhausted_targets += sum(
+                target_state.status is DeliveryStatus.EXHAUSTED
+                for target_state in batch.targets.values()
+            )
+            del state.outbox[batch_id]
+    return OutboxCompactionStats(
+        removed_batches=removed_batches,
+        removed_sent_targets=removed_sent_targets,
+        removed_exhausted_targets=removed_exhausted_targets,
+        normalized_exhausted_targets=normalized_exhausted_targets,
+    )
 
 
 def create_batches(
@@ -329,7 +393,11 @@ def _reserve_slot(
 
 
 def _ordered_batches(state: WatcherState) -> list[DeliveryBatch]:
-    return sorted(state.outbox.values(), key=_batch_order_key)
+    quarantined = set(state.legacy_outbox_ids)
+    return sorted(
+        (batch for key, batch in state.outbox.items() if key not in quarantined),
+        key=_batch_order_key,
+    )
 
 
 def _image_group_id(batch: DeliveryBatch) -> str | None:
@@ -415,6 +483,8 @@ def count_throttled(
     now_dt = parse_utc(now)
     count = 0
     for batch in state.outbox.values():
+        if batch.batch_id in state.legacy_outbox_ids:
+            continue
         if batch.card_payload is None:
             continue
         for target_state in batch.targets.values():

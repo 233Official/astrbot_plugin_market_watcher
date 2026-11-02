@@ -35,8 +35,6 @@ _LAYOUTS = {
 
 SOURCE_LABELS = {
     SourceKind.MARKET.value: "AstrBot 市场",
-    SourceKind.COLLECTION_ISSUE.value: "Collection Issue",
-    SourceKind.LEGACY_PUBLISH_ISSUE.value: "主仓旧 Issue",
     SourceKind.GITHUB_DISCOVERY.value: "GitHub 补充发现",
 }
 

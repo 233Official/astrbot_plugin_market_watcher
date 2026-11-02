@@ -14,8 +14,6 @@
 | `github_token` | `string` | `""` | 可选 Fine-grained Token | 是 |
 | `llm_provider_id` | `string` | `""` | AstrBot Provider ID | 可能暴露内部命名 |
 | `source_market_api` | `bool` | `true` | `true` / `false` | 否 |
-| `source_collection_issues` | `bool` | `true` | `true` / `false` | 否 |
-| `source_plugin_publish_issues` | `bool` | `false` | `true` / `false` | 否 |
 | `source_github_discovery` | `bool` | `false` | `true` / `false` | 否 |
 | `include_star_count` | `bool` | `true` | `true` / `false` | 否 |
 | `enable_ai_summary` | `bool` | `false` | `true` / `false` | 否 |
@@ -104,12 +102,18 @@
 
 | 配置键 | 默认状态 | 说明与风险 |
 | --- | --- | --- |
-| `source_market_api` | 开启 | 使用市场 API / `plugins.json`，是主要事实来源 |
-| `source_collection_issues` | 开启 | 使用 AstrBot 插件 Collection Issues，作为主要发布候选信号 |
-| `source_plugin_publish_issues` | 关闭 | 旧入口已废弃，仅兼容历史和残留信号 |
+| `source_market_api` | 开启 | 使用 AstrBot Cloud 唯一市场事实来源；失败保留快照，无旧目录回退 |
 | `source_github_discovery` | 关闭 | 搜索 `astrbot_plugin_*` 仓库，成本和误报率较高 |
 
 这些键由 `main.py` 直接读取：只有实际布尔值 `true` 才启用；键缺失或类型不是 `bool` 时按关闭处理。正常通过 WebUI 保存时，应由 schema 提供上表默认值。
+
+旧发布流程的开关已删除，旧配置遗留值不再启用采集。GitHub 元数据只补充已有仓库，不扩大市场清单；独立搜索仍由自己的开关控制。
+
+### #4 迁移与停用
+
+`enabled=false` 仅停自动检查，不停出站箱 drain 或手动检查。保持线上插件停用；未来部署前备份 `state.json` 和 `.bak` 并审查隔离队列。
+
+schema v1/v2 升级到 v3 后，旧市场首次成功完整 Cloud 结果静默重建；失败不消耗迁移，重启幂等。含 pending/failed/exhausted 的旧生产批次隔离保留，不自动重放，不清空全部 outbox。管理员通过 `migration` 查看安全计数，`migration_release` / `migration_discard` 仅处置隔离批次，保留 sent 状态，不影响新队列和诊断批次；release 不重置 exhausted 或重试计数。
 
 ---
 
@@ -120,7 +124,7 @@
 - 每个推送分片最多包含的变化条目数，默认 `10`。
 - 有效范围为 `1`–`50`；缺失、类型错误或越界时按 `10` 回退。
 - 调高可能产生更长消息；插件仍会按内部消息长度边界组织事实摘要。
-- 当 `enable_image_card` 为 `true` 时，`max_items_per_push` 被覆盖为每批最多 5 条（图片卡片视觉容量上限），以避免渲染超长卡片。
+- 当 `enable_image_card` 为 `true` 时，分页容量由 `image_card_max_items` 控制，纯文本模式仍使用本项。
 
 ---
 
@@ -138,6 +142,21 @@
 - 单次 HTML→图片渲染超时上限，默认 `8` 秒。
 - 有效范围为 `3`–`20`；缺失、类型错误或越界时按 `8` 回退。
 - 超时或取消时不会触发文本回退内的再次渲染，直接使用原始 `message` 文本发送。
+
+### `image_card_max_items`
+
+- 图片页最大事件数，默认 `15`，允许 `5`、`10`、`15`；其他值按 `15` 回退。
+- 均衡分页保留全部事件，例如 16 项为 8+8，50 项为 13+13+12+12；页码在重试和重启后保持不变。
+
+### `max_images_per_delivery`
+
+- 每目标每个 60 秒窗口的图片投递尝试上限，默认 `2`，范围 `1`–`10`。
+- 真正进入发送才占配额；成功、失败及文本回退均计入。超额保持 pending，由独立 drain 在后续窗口续传，不消耗重试次数。
+
+### `image_send_interval_seconds`
+
+- 同目标相邻图片投递尝试的最小间隔，默认 `2` 秒，范围 `0`–`30`。
+- 窗口和最后尝试时间持久化，手动检查、自动检查、独立 drain 和重启共享同一账本。
 
 ---
 

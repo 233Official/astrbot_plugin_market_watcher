@@ -1,0 +1,24 @@
+{
+  "$meta": {"schema_version": 1, "name": "AstrBot Official Plugin Market", "version": "2026-11-02T00:00:00Z"},
+  "demo": {
+    "name": "astrbot_plugin_demo",
+    "repo": "https://github.com/Example/AstrBot_Plugin_Demo.git",
+    "display_name": "演示插件",
+    "desc": "市场中的演示插件",
+    "author": "demo-author",
+    "version": "1.2.0",
+    "astrbot_version": ">=4.24",
+    "support_platforms": ["aiocqhttp", "telegram"],
+    "tags": ["工具"],
+    "updated_at": "2026-07-20T00:00:00Z",
+    "stars": 12,
+    "download_count": 1500
+  },
+  "second": {
+    "name": "astrbot_plugin_second",
+    "repo": "https://github.com/example/astrbot_plugin_second",
+    "desc": "固定的第二个插件",
+    "version": "1.0.0",
+    "tags": ["辅助"]
+  }
+}

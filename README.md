@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.0%2C%3C5-6f42c1)](https://github.com/AstrBotDevs/AstrBot)  [![Python](https://img.shields.io/badge/Python-%3E%3D3.10-3776ab)](https://www.python.org/)  [![License](https://img.shields.io/badge/license-AGPL--3.0-green)](./LICENSE)
 
-当前支持市场 API / `plugins.json`、AstrBot 插件 Collection Issues，并可选补充旧发布 Issue、GitHub 全局发现、Star 数和 AI 导语。最快的使用路径是通过仓库地址安装，在目标群订阅，然后执行一次检查。遇到问题请提交 [GitHub Issue](https://github.com/233Official/astrbot_plugin_market_watcher/issues)。
+当前以 AstrBot Cloud 为唯一市场事实来源，无旧目录回退；可选 GitHub 独立发现、Star 数和 AI 导语。GitHub 元数据仅补充已有仓库，不扩大市场清单。遇到问题请提交 [GitHub Issue](https://github.com/233Official/astrbot_plugin_market_watcher/issues)。
 
 ---
 
@@ -90,7 +90,7 @@ https://github.com/233Official/astrbot_plugin_market_watcher
 
 | 配置键 | 默认值 | 用途与风险 |
 | --- | --- | --- |
-| `enabled` | `false` | 是否启动自动调度；关闭不影响手动 `check` |
+| `enabled` | `false` | 仅控制自动检查；关闭不停止 outbox 投递，也不影响手动 `check` |
 | `poll_interval_minutes` | `30` | 每轮完成后的等待分钟数，范围 `5`–`1440` |
 | `push_targets` | `[]` | WebUI 配置的 UMO；留空时仅使用群订阅目标 |
 | `github_token` | `""` | 可选敏感项，仅用于提高 GitHub API 限额 |
@@ -106,11 +106,18 @@ https://github.com/233Official/astrbot_plugin_market_watcher
 
 ## 数据源与默认行为
 
-- 默认启用市场 API / `plugins.json` 与 AstrBot 插件 Collection Issues。
-- AstrBot 主仓旧 `plugin-publish` Issues 已废弃，仅作兼容，默认关闭。
+- 默认启用 AstrBot Cloud 市场，不再采集旧发布流程或旧目录。
 - GitHub `astrbot_plugin_*` 全局发现成本与误报率较高，默认关闭。
 - 首次成功采集只建立静默基线；后续新增和实质更新才形成变化事件。
 - 配置目标与群订阅会合并、清理、去重并排序后用于推送。
+
+### #4 Cloud 迁移与部署边界
+
+- 旧 schema v1/v2 市场在首次成功、完整的 Cloud 采集后静默重建，不发送历史差异；失败或不完整结果不消耗迁移，重启幂等。
+- 旧生产 outbox 中含 pending / failed / exhausted 的批次全部隔离保留，不会自动重放；不是清空全部 outbox。已发送状态保留，新批次和诊断队列不受处置影响。
+- 管理员先用 `/marketwatch migration` 查看隔离批次数与基线状态，审查备份中的隔离队列后明确执行 `migration_release` 恢复或 `migration_discard` 丢弃未发送目标。恢复不会重置 attempt、重试时间或 exhausted；已 exhausted 不会因此自动重试。
+- 升级前停用插件并备份 `state.json` 及 `.bak`，审查旧队列；启用升级版本后查看隔离状态，再决定恢复或丢弃。**`enabled=false` 不是停投递**，独立 drain 仍会运行。部署及真实消息验收需要独立授权。
+- outbox 压缩会移除所有目标均为 sent/exhausted 的非隔离生产批次，保留隔离、诊断和仍待投递的批次；状态诊断显示文件/字段字节数、对象计数、来源完整性与分页信息，不暴露目标或消息正文。
 
 ---
 

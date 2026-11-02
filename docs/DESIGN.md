@@ -1,12 +1,12 @@
-# Market Watcher 1.0.0 最终设计
+# Market Watcher 设计
 
-本文描述 `astrbot_plugin_market_watcher` 1.0.0 的最终实现结构与长期不变量。PRD 和 FSD 保留需求形成过程与验收契约，本文不重复粘贴历史规格。
+本文描述 `astrbot_plugin_market_watcher` 当前实现结构与长期不变量。PRD 和 FSD 保存需求及验收契约。
 
 ---
 
 ## 1.0 范围与非目标
 
-1.0 提供四来源采集、规范化合并、新增与实质更新检测、可靠推送、群订阅、GitHub 元数据增强、可选 AI 导语、自动调度和管理员诊断。
+当前提供 Cloud 市场与可选独立 GitHub 发现、规范化合并、新增与实质更新检测、可靠推送、群订阅、GitHub 元数据增强、可选 AI 导语、自动调度和管理员诊断。
 
 - 首次成功采集只建立静默基线，不批量推送历史记录。
 - 事实模板始终权威；Star 和 AI 只作增强，不改变事件判定。
@@ -34,11 +34,11 @@
 
 ---
 
-## 四来源与变化流水线
+## Cloud 市场与变化流水线
 
-四来源分别是市场 API 或官方 `plugins.json` fallback、Collection Issues、主仓历史 `plugin-publish` Issues 和 GitHub 全局仓库发现。默认启用市场与 Collection，另外两项默认关闭。
+AstrBot Cloud 是唯一市场事实来源，无旧目录回退，不采集旧发布流程。默认启用市场，GitHub 独立仓库发现默认关闭；GitHub 元数据只补充已有仓库，不扩大市场清单。
 
-采集结果先 normalize 为 `SourceObservation`，以规范化 GitHub 仓库优先形成 canonical ID。merge 按市场 > Collection > 主仓旧 Issues > GitHub discovery 的字段优先级生成 `PluginRecord`，同时保留字段来源与证据。
+采集结果 normalize 为 `SourceObservation`，以规范化 GitHub 仓库优先形成 canonical ID。merge 按市场 > GitHub discovery 的字段优先级生成 `PluginRecord`，保留字段来源与证据。Cloud 的 name、展示名、描述、作者、版本、仓库、兼容版本、平台和 tags 等实质字段参与检测；GitHub stars、forks、archived、repo_updated_at 只作元数据，不触发市场更新。
 
 change detection 只比较白名单中的实质字段并生成 `discovered` 或 `updated`。来源失败、不完整响应和未建立基线的来源不得制造删除或伪变化；Star 波动不生成事件。
 
@@ -46,7 +46,7 @@ change detection 只比较白名单中的实质字段并生成 `discovered` 或 
 
 ## State schema 与原子持久化
 
-`state.json` 使用严格 schema v1，保存来源快照、合并插件、GitHub cache/rate-limit、outbox、订阅和最后运行报告。未知结构、类型错误或更高 schema 版本会被拒绝。
+`state.json` 使用严格 schema v3，保存来源快照、合并插件、GitHub cache/rate-limit、outbox、订阅和最后运行报告，并新增 `legacy_outbox_ids` 与 `market_baseline_pending`。未知结构、类型错误或更高 schema 版本会被拒绝。
 
 保存流程先写同目录临时文件、`fsync`、严格回读，再维护有效 `state.json.bak`，最后用原子替换更新主文件并同步目录。主文件损坏时读取备份；主文件和备份均无效时报告损坏，不静默覆盖证据。运行状态只写入 `StarTools.get_data_dir()` 提供的数据目录。
 
@@ -65,6 +65,18 @@ change detection 只比较白名单中的实质字段并生成 `discovered` 或 
 
 诊断 prepare 使用长期 hold，只有显式 deliver 或 cleanup 才解除；deliver 复用生产投递链路。
 
+### #4 Cloud 迁移与隔离
+
+- 启动构造 service 后、检查及 drain 调度启动前调用 `prepare_migration()` 并保存迁移；检查和 drain 入口同样保证迁移先落盘。
+- v1/v2 旧市场在首次成功完整 Cloud 采集时静默重建当前市场记录；失败不消耗迁移，不抑制独立 GitHub 来源的真实变化。迁移会剔除历史误解析的 `$meta`，保留缺项插件身份与最后值。迁移和管理员空队列处置重启幂等，新建 v3 state 不需要旧市场迁移。
+- 旧生产队列中含 pending/failed/exhausted 的批次 ID 写入隔离清单，保留原批次与 sent 状态，不自动重放，不清空全部 outbox；诊断 batch 和迁移后新批次不被隔离处置。
+- 管理员 `migration` 只返回隔离批次数和待基线状态。`migration_release` 解除隔离而不重置 attempt/retry/exhausted；`migration_discard` 仅丢弃隔离批次未发送目标，sent 保留至常规压缩。成功后唤醒 drain，输出不含目标或正文。
+- 升级前保持插件停用，备份 `state.json` 及 `.bak` 并审查旧队列；启用升级版本后先查看隔离状态，再明确恢复或丢弃。`enabled=false` 不停止 drain，不能作为暂停投递的手段。
+
+### 压缩与本地观测
+
+outbox 压缩移除所有目标均为 sent/exhausted 的非隔离生产批次，保留仍需投递的数据、诊断批次和隔离批次。`status.py` 统计顶层字段字节数、观察/快照/队列对象计数，并输出安全来源完整性、分页和错误码；不展示目标或消息正文。
+
 ---
 
 ## T2I 图片卡片投递
@@ -78,7 +90,7 @@ change detection 只比较白名单中的实质字段并生成 `discovered` 或 
 
 ### 分页与渲染
 
-- 图片卡片启用时，`create_batches` 按每批最多 5 条事件（`MAX_EVENTS_PER_CARD`）分页并生成 `card_payload`；禁用时恢复 `max_items_per_push` 控制。
+- 图片卡片启用时，`create_batches` 按 `image_card_max_items`（默认 15，可选 5/10/15）均衡分页；每页根据事件数选择 1/2/3 列。纯文本保持 `max_items_per_push` 控制。每目标默认 60 秒窗口内最多尝试 2 页，相邻图片间隔默认 2 秒；超额页面保留 pending，独立 drain 续传，不增加 attempt，页码和 payload 跨重试、重启不变。
 - 每个到期 batch **最多调用一次** `html_render`。`AstrBotNotifier.prepare` 调用 `build_render_request()` 获取模板和数据，使用 `asyncio.wait_for` 施加严格超时。渲染结果存储在 notifier 实例上，多目标投递复用同一份 bytes。
 
 ### AstrBot 本地文件路径契约
@@ -117,9 +129,9 @@ change detection 只比较白名单中的实质字段并生成 `discovered` 或 
 
 ## GitHub auth、budget、cache 与 rate limit
 
-GitHub Token 可选，只注入 exact `https://api.github.com`。每轮共享预算为 Token 模式 20 次、匿名模式 5 次，并发上限 2。元数据缓存使用 ETag，Token 模式 TTL 为 6 小时，匿名模式为 24 小时。
+GitHub Token 可选，只注入 exact `https://api.github.com`。每轮共享预算为 40 次，并发上限 2；元数据缓存使用 ETag，Token 模式 TTL 为 6 小时，匿名模式为 24 小时。
 
-请求按 Collection、旧 Issues、事件相关元数据、普通元数据、GitHub Search 的顺序分配价值。401 会在本轮禁用 Token 并收缩到匿名预算；403 根据 headers 与安全截断的响应信号区分权限不足和限流；429 或 secondary rate-limit 会阻止本轮后续 GitHub 请求。已有 cache 在失败时保留为 stale，而不是清空事实。
+请求按事件相关元数据、普通元数据、GitHub Search 的顺序分配价值。401 会在本轮禁用 Token；403 根据 headers 与安全截断的响应信号区分权限不足和限流；429 或 secondary rate-limit 会阻止本轮后续 GitHub 请求。已有 cache 在失败时保留为 stale，而不是清空事实。
 
 ---
 

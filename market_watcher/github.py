@@ -14,8 +14,11 @@ from .errors import classify_exception
 from .http import GitHubAuthHttpClient, HttpClient, HttpResponse
 from .models import GitHubRepoCache, PluginRecord, WatcherState
 
-TOKEN_BUDGET = 20
-ANONYMOUS_BUDGET = 5
+# Metadata enrichment and optional independent repository search share one
+# bounded gateway budget; neither expands the Cloud market inventory.
+DEFAULT_RUN_REQUEST_BUDGET = 40
+TOKEN_BUDGET = DEFAULT_RUN_REQUEST_BUDGET
+ANONYMOUS_BUDGET = DEFAULT_RUN_REQUEST_BUDGET
 TOKEN_TTL = timedelta(hours=6)
 ANONYMOUS_TTL = timedelta(hours=24)
 METADATA_PRIORITY_HEADER = "X-AstrBot-Metadata-Priority"
@@ -302,10 +305,6 @@ def _request_priority(url: str, headers: dict[str, str]) -> int:
         except ValueError:
             return 3
     parsed = urlsplit(url)
-    if parsed.path.endswith("/AstrBot_Plugins_Collection/issues"):
-        return 0
-    if parsed.path.endswith("/AstrBot/issues"):
-        return 1
     if parsed.path == "/search/repositories":
         page = parse_qs(parsed.query).get("page", ["1"])[0]
         return 5 if page != "1" else 4

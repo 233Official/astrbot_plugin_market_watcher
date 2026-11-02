@@ -1,4 +1,4 @@
-"""AstrBot market API with an endpoint-isolated raw fallback."""
+"""AstrBot Cloud market feed, the sole source of market facts."""
 
 from __future__ import annotations
 
@@ -18,11 +18,7 @@ from ..normalize import (
     utc_now,
 )
 
-MARKET_API_URL = "https://api.soulter.top/astrbot/plugins"
-MARKET_RAW_URL = (
-    "https://raw.githubusercontent.com/AstrBotDevs/"
-    "AstrBot_Plugins_Collection/main/plugins.json"
-)
+MARKET_API_URL = "https://cloud.astrbot.app/api/v1/market/plugins.json"
 
 
 class MarketFetcher:
@@ -31,23 +27,7 @@ class MarketFetcher:
         self.clock = clock
 
     async def fetch(self, previous: SourceState | None = None) -> FetchResult:
-        primary = await self._request(MARKET_API_URL, previous, sparse=False)
-        if primary.success and primary.complete:
-            return primary
-        fallback = await self._request(MARKET_RAW_URL, previous, sparse=True)
-        fallback.from_fallback = True
-        if not (fallback.success and fallback.complete):
-            fallback.error_code = "market_and_fallback_failed"
-            fallback.error_summary = "primary and fallback were not complete"
-        return fallback
-
-    async def _request(
-        self,
-        endpoint: str,
-        previous: SourceState | None,
-        *,
-        sparse: bool,
-    ) -> FetchResult:
+        endpoint = MARKET_API_URL
         snapshot = previous.snapshot_for(endpoint) if previous else None
         headers = _conditional_headers(
             snapshot.etag if snapshot else None,
@@ -65,6 +45,13 @@ class MarketFetcher:
                     response,
                     "not_modified_without_endpoint_snapshot",
                     "304 had no matching endpoint snapshot",
+                )
+            if not snapshot.observations:
+                return _failure(
+                    endpoint,
+                    response,
+                    "no_valid_plugins",
+                    "cached market snapshot contained no valid plugins",
                 )
             return FetchResult(
                 source_kind=SourceKind.MARKET,
@@ -93,15 +80,13 @@ class MarketFetcher:
             return _failure(
                 endpoint, response, "invalid_json", "response was not valid JSON"
             )
-        return self._parse(payload, endpoint, response, sparse=sparse)
+        return self._parse(payload, endpoint, response)
 
     def _parse(
         self,
         payload: Any,
         endpoint: str,
         response: HttpResponse,
-        *,
-        sparse: bool,
     ) -> FetchResult:
         if type(payload) is not dict or not payload:
             return _failure(
@@ -114,7 +99,12 @@ class MarketFetcher:
         observations: list[SourceObservation] = []
         rejected = 0
         for slug, item in payload.items():
+            if slug == "$meta":
+                continue
             if type(slug) is not str or type(item) is not dict:
+                rejected += 1
+                continue
+            if not slug.strip() or not item:
                 rejected += 1
                 continue
             observation = _market_observation(
@@ -122,14 +112,13 @@ class MarketFetcher:
                 item,
                 endpoint,
                 observed_at=observed_at,
-                sparse=sparse,
             )
             if observation is None:
                 rejected += 1
             else:
                 observations.append(observation)
-        received = len(payload)
-        complete = bool(observations) and rejected / received <= 0.05
+        received = len(payload) - ("$meta" in payload)
+        complete = bool(observations) and rejected / max(received, 1) <= 0.05
         return FetchResult(
             source_kind=SourceKind.MARKET,
             success=bool(observations),
@@ -142,10 +131,20 @@ class MarketFetcher:
             pages_fetched=1,
             records_received=received,
             records_rejected=rejected,
-            error_code=None if complete else "incomplete_parse",
-            error_summary=None
-            if complete
-            else "market parse rejection threshold exceeded",
+            error_code=(
+                None
+                if complete
+                else "incomplete_parse"
+                if observations
+                else "no_valid_plugins"
+            ),
+            error_summary=(
+                None
+                if complete
+                else "market parse rejection threshold exceeded"
+                if observations
+                else "market payload contained no valid plugins"
+            ),
         )
 
 
@@ -155,10 +154,11 @@ def _market_observation(
     endpoint: str,
     *,
     observed_at: str,
-    sparse: bool,
 ) -> SourceObservation | None:
     repo_value = _first(item, "repo", "repo_url", "repository", "url")
     normalized = normalize_github_repo(repo_value)
+    if not normalized and not sanitize_text(_first(item, "name", "plugin_name"), 256):
+        return None
     canonical_id = (
         normalized[0] if normalized else fallback_canonical_id(SourceKind.MARKET, slug)
     )
@@ -217,13 +217,8 @@ def _market_observation(
         forks=_optional_int(item.get("forks")),
         archived=fields["archived"],
         repo_updated_at=sanitize_text(item.get("updated_at"), 128),
-        observation_hash=observation_hash(
-            **fields,
-            stars=_optional_int(item.get("stars")),
-            forks=_optional_int(item.get("forks")),
-            repo_updated_at=sanitize_text(item.get("updated_at"), 128),
-        ),
-        sparse=sparse,
+        observation_hash=observation_hash(**fields),
+        sparse=False,
         raw_excerpt=bounded_excerpt(
             {key: item[key] for key in sorted(item) if key in excerpt_keys}
         ),

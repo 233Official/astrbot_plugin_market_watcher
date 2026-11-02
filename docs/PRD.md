@@ -12,7 +12,7 @@
 
 ## 背景
 
-AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection 流程和 GitHub 仓库中。维护者与用户难以及时判断哪些插件刚发布、版本发生变化、仓库迁移、描述调整或热度上升，也容易因多个入口重复出现同一插件而收到重复消息。
+AstrBot 插件生态的信息分散在 Cloud 市场和 GitHub 仓库中。维护者与用户难以及时判断哪些插件刚发布、版本发生变化、描述调整，也容易因多个入口重复出现同一插件而收到重复消息。#4 将 Cloud 固定为唯一市场事实来源，移除旧目录回退与旧发布流程采集。
 
 本插件拟在 AstrBot 内提供低干扰、可解释、可降级的市场变化观察能力。系统必须先建立可靠基线，再报告后续变化；不得把抓取失败、来源差异或 AI 推测包装成确定事实。
 
@@ -29,7 +29,7 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ## 目标
 
-- 聚合四类来源并转换为统一插件记录。
+- 聚合 Cloud 市场与可选独立 GitHub 发现，转换为统一插件记录。
 - 识别新增和实质更新事件。
 - 通过规范化仓库地址和稳定标识对跨来源记录去重。
 - 为变化生成确定性摘要，并可选使用 AI 改善可读性。
@@ -53,7 +53,7 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 ## 用户故事
 
 - 作为 AstrBot 管理员，我希望每次轮询发现变化后收到新增和更新插件摘要，以便了解生态变化。
-- 作为插件开发者，我希望同一发布在市场和 Issue 中出现时只提醒一次，并保留来源证据。
+- 作为插件开发者，我希望同一插件在市场和独立 GitHub 发现中出现时只提醒一次，并保留来源证据。
 - 作为低配额用户，我希望不配置 Token 也能使用主要市场来源，并在 GitHub API 限流时得到明确降级提示。
 - 作为隐私敏感用户，我希望 Token 不出现在日志和推送中，且不配置目标时绝不主动发送。
 - 作为维护者，我希望能手动执行正常检查、查看本轮摘要、上次成功时间和错误摘要。
@@ -62,27 +62,11 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ## 数据源
 
-### 市场 API 或 plugins.json
+### AstrBot Cloud 市场
 
-- 定位：主要事实来源。
+- 定位：唯一市场事实来源，无旧目录回退。
 - 内容：插件名、展示名、描述、版本、作者、仓库地址、兼容版本及市场状态等可用字段。
 - 策略：支持 ETag、`Last-Modified` 或内容哈希缓存；解析失败时保留上次成功快照，不将空结果视为全量删除。
-
----
-
-### AstrBot 主仓 plugin-publish Issues
-
-- 定位：兼容历史与残留信号，不作为新发布的主要权威来源。
-- 原因：官方发布指南已说明主仓发布入口废弃，但历史 Issue、尚未迁移的自动化或残留提交仍可能提供线索。
-- 策略：与 Collection Issues 并行采集，但默认关闭或降低优先级；记录 Issue 状态和链接，不单独据此认定已进入官方市场。
-
----
-
-### AstrBot 插件 Collection Issues
-
-- 定位：主要发布入口和候选来源，与市场数据共同构成主来源。
-- 内容：提交仓库、作者声明、审核状态、讨论和关闭原因等公开信息。
-- 策略：识别开放、关闭、重新打开和关键标签变化；只有满足明确状态规则时才转换为新增或实质更新候选事件。
 
 ---
 
@@ -92,7 +76,6 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 - 范围：公开仓库名或主题符合 `astrbot_plugin_*` 约定的候选仓库。
 - 策略：低频运行，默认关闭；按更新时间分页，限制最大页数，对 fork、归档、镜像和明显无关仓库设置过滤规则。
 
-两个 Issues 入口需要并行建模，以保留迁移期和历史事实；但由于官方发布指南称主仓 `plugin-publish` 入口已废弃，产品排序、可信度和默认开关均以 Collection/市场为主，主仓入口只承担兼容历史与残留信号的职责。
 
 ---
 
@@ -118,7 +101,7 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 1. 首选规范化后的 GitHub `owner/repo`，统一大小写、移除 `.git`、查询参数、片段和尾部斜杠。
 2. 后续获得可规范化仓库地址时可将来源 fallback ID 合并到 GitHub canonical ID 并保留别名；MVP 不生成仓库迁移事件。
 3. 仓库缺失时，使用来源 ID 作为临时键，不仅凭插件展示名合并。
-4. 同一轮中市场记录优先于 Collection，Collection 优先于主仓兼容 Issue，全局发现最低。
+4. 同一轮中 Cloud 市场记录优先于独立 GitHub 全局发现。
 5. 字段冲突保留来源证据和优先级，不覆盖为无来源的“最终真相”。
 6. fork、镜像或重名仓库不自动合并；需要可解释规则或人工覆盖映射。
 
@@ -173,13 +156,13 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ## 配置需求
 
-- `enabled`：总开关，默认关闭。
+- `enabled`：仅自动检查开关，默认关闭；不是停止投递开关。
 - `poll_interval_minutes`：轮询间隔，需设置合理下限。
 - `push_targets`：UMO 列表，默认空。
 - `github_token`：可选，默认空，最小权限且永不记录明文。
 - `llm_provider_id` 与 `enable_ai_summary`：摘要模型与开关。
 - `ai_timeout_seconds`：AI Provider 单次调用超时，默认 60 秒，范围 10 至 120 秒。
-- 四个 `source_*` 开关：市场、Collection 默认开；废弃主仓入口和全局发现默认关。
+- 两个 `source_*` 开关：Cloud 市场默认开，独立 GitHub 全局发现默认关。元数据只补充已有仓库，不扩大市场成员。
 - `include_star_count`、请求超时、每轮和每次推送上限。
 - MVP 不增加当前 schema 之外的用户配置；请求预算、Star TTL 和重试上限先作为内部常量。
 - 群管理员可在群聊中订阅或取消当前官方 UMO；运行时将 WebUI 目标与群订阅合并，历史 outbox target snapshot 不随订阅变化。
@@ -194,9 +177,9 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 - `marketwatch test-push`：管理员仅可在群聊中向当前 `event.unified_msg_origin` 发送一条主动推送诊断消息；不得执行来源检查或修改插件、订阅、outbox 持久状态，失败仅返回脱敏错误类别。
 - `marketwatch test-ai`：管理员仅可在群聊中使用固定虚构事实验证真实 Provider。显式 `llm_provider_id` 非空时优先使用，否则通过当前 `event.unified_msg_origin` 解析默认 Provider；该诊断不受 `enable_ai_summary` 开关阻止。
 - AI 诊断成功时只返回经过现有输出校验的安全导语；Provider 缺失、超时、异常或输出不合规时明确返回脱敏错误类别和纯事实回退，不泄露 UMO、内部 prompt、Token 或供应商错误。
-- AI 诊断不执行四来源检查，不创建或持久化市场事件，也不读写插件状态、订阅或 outbox。
+- AI 诊断不执行来源检查，不创建或持久化市场事件，也不读写插件状态、订阅或 outbox。
 - `marketwatch test-github`：管理员仅可在群聊中独立请求 GitHub `/rate_limit`，输出匿名或已配置 Token 模式、HTTP 状态、安全分类及 primary rate limit 摘要；不得输出 Token、Authorization、响应正文或 UMO。
-- GitHub 诊断使用独立短生命周期 HTTP client，不复用生产 `GitHubGateway`，因此不消耗其 5/20 请求预算、不更新 `state.github.rate_limit`、不执行来源检查。`/rate_limit` 成功不证明其他端点权限。
+- GitHub 诊断使用独立短生命周期 HTTP client，不复用生产 `GitHubGateway`，不消耗其共享请求预算、不更新 `state.github.rate_limit`、不执行来源检查。`/rate_limit` 成功不证明其他端点权限。
 - `marketwatch test-outbox-prepare/status/deliver/cleanup`：四个无参 canonical 管理员群聊命令，用于安全证明 pending outbox 可跨完整 AstrBot 重启恢复。prepare 仅持久化带长期 hold 的诊断 batch；status 只输出状态计数；deliver 解除 hold 后复用生产投递；cleanup 只删除诊断前缀。
 - 诊断 batch 使用目标 SHA-256 派生的稳定 ID，同一群重复 prepare 幂等；不得输出 ID、UMO、消息、时间或异常原文。成功投递保留 sent 证据，失败沿用生产 attempts/backoff/exhausted 规则。
 - 上述为不含唤醒词的 canonical 命令名；AstrBot 在命令 filter 前统一处理当前 `wake_prefix`，插件不自行解析或剥离前缀。
@@ -252,11 +235,13 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 - 插件可在受支持 AstrBot 版本加载、禁用、启用、重载和卸载，不遗留后台任务。
 - 未配置 Token 和推送目标时仍可安全运行，且不会主动推送。
 - 首次成功采集只建立基线；第二次相同输入不产生事件。
-- 四类来源的 fixture 可标准化，跨来源同仓库只形成一个 canonical 插件。
-- 市场或 Collection 的新增与版本变化能生成带来源证据的事件。
+- Cloud 与独立 GitHub 搜索的 fixture 可标准化，跨来源同仓库只形成一个 canonical 插件。
+- 市场新增与实质字段变化能生成带来源证据的事件；GitHub 归档或 Star 变化不生成市场更新。
 - 单源失败、空响应、GitHub 限流和 LLM 失败均按降级规则处理。
 - 日志、状态、测试输出与消息中不出现 Token 明文。
 - 静态测试无需安装 AstrBot；集成阶段另提供 AstrBot 环境测试。
+- #4：旧 v1/v2 市场首次成功完整 Cloud 采集静默重建，失败不消耗迁移，重启幂等；旧 pending/failed/exhausted 生产批次隔离保留、不自动重放、不清空全部 outbox。管理员查看安全计数后选择仅恢复或丢弃隔离批次，sent 保留，新批次和诊断队列不受影响。
+- 升级前停用插件，备份 state 与 bak 并审查旧队列；启用升级版本后先查看隔离状态，再明确处置。`enabled=false` 不停止投递，部署和真实消息验收需独立授权。
 - 真实 outbox 验收按 prepare → status pending=1 → 完整重启 AstrBot → status pending=1 → deliver → 群收到诊断消息 → status sent=1/pending=0 → cleanup → status count=0 执行。
 
 ---
@@ -272,7 +257,7 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ### M1：状态与主要来源
 
-- 原子状态存储、市场/Collection fetcher、标准化、基线和 fixture 测试。
+- 原子状态存储、Cloud fetcher、标准化、基线和 fixture 测试。
 
 ---
 
@@ -296,7 +281,7 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ## 风险
 
-- 官方市场端点或 Issue 模板变化导致解析失效。
+- Cloud 端点、分页或字段变化导致解析失效；不允许回退旧目录制造变化。
 - 多来源延迟不同，可能出现暂时冲突或重复事件。
 - GitHub 无 Token 配额较低，全局发现容易消耗预算。
 - 仓库重命名、转移、fork 和镜像可能造成错误合并。
@@ -309,5 +294,5 @@ AstrBot 插件生态的信息分散在市场清单、发布 Issue、Collection �
 
 ## 实现前待验证
 
-- 验证市场 API、官方 `plugins.json` fallback、Collection 仓库与 Issue 标签的真实端点和字段；默认实现决策见 FSD。
+- Cloud 单端点 `$meta` 与 slug 映射、同端点条件 GET 缓存契约必须通过离线 fixture 固化；不访问旧目录和旧发布流程。
 - 验证 AstrBot 当前版本的管理员命令校验、UMO 主动消息和 LLM Provider API；无法稳定表达管理员权限时不得绕过。

@@ -1,8 +1,8 @@
-"""Strict M1 domain and schema-version 2 persistence models.
+"""Strict domain and version 3 persistence models.
 
-Schema v2 adds per-target image delivery window accounting
-(``image_delivery_windows``) while keeping v1 fields unchanged.  v1 state is
-migrated explicitly (empty window map); unknown fields are still rejected.
+Legacy versions migrate to an explicit Cloud rebaseline and outbox quarantine.
+Unknown fields remain errors; old source kinds are readable as historical
+evidence but no longer have collectors.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ class ModelValidationError(ValueError):
 
 class SourceKind(str, Enum):
     MARKET = "market"
+    # Persisted historical evidence only; never scheduled as active sources.
     COLLECTION_ISSUE = "collection_issue"
     LEGACY_PUBLISH_ISSUE = "legacy_publish_issue"
     GITHUB_DISCOVERY = "github_discovery"
@@ -245,7 +246,6 @@ class FetchResult:
     records_received: int = 0
     records_rejected: int = 0
     not_modified: bool = False
-    from_fallback: bool = False
     error_code: str | None = None
     error_summary: str | None = None
 
@@ -285,6 +285,7 @@ class PluginRecord:
         payload = {
             key: getattr(self, key)
             for key in (
+                "name",
                 "display_name",
                 "description",
                 "author",
@@ -292,10 +293,8 @@ class PluginRecord:
                 "repo_url",
                 "astrbot_version",
                 "platforms",
+                "tags",
                 "market_status",
-                "issue_state",
-                "issue_labels",
-                "archived",
             )
         }
         encoded = json.dumps(
@@ -888,7 +887,7 @@ class GitHubState:
 
 @dataclass(slots=True)
 class WatcherState:
-    schema_version: int = 2
+    schema_version: int = 3
     updated_at: str | None = None
     subscriptions: list[str] = field(default_factory=list)
     sources: dict[str, SourceState] = field(default_factory=dict)
@@ -898,6 +897,8 @@ class WatcherState:
     outbox: dict[str, DeliveryBatch] = field(default_factory=dict)
     image_delivery_windows: dict[str, ImageDeliveryWindow] = field(default_factory=dict)
     last_run: dict[str, Any] = field(default_factory=dict)
+    legacy_outbox_ids: list[str] = field(default_factory=list)
+    market_baseline_pending: bool = False
 
     def __post_init__(self) -> None:
         self.subscriptions = _subscriptions(self.subscriptions, "state.subscriptions")
@@ -913,6 +914,8 @@ class WatcherState:
                 for key in sorted(self.image_delivery_windows)
             },
             "last_run": self.last_run,
+            "legacy_outbox_ids": sorted(self.legacy_outbox_ids),
+            "market_baseline_pending": self.market_baseline_pending,
             "outbox": {key: self.outbox[key].to_dict() for key in sorted(self.outbox)},
             "plugins": {
                 key: self.plugins[key].to_dict() for key in sorted(self.plugins)
@@ -938,7 +941,16 @@ class WatcherState:
                 "image_delivery_windows": {},
             }
             version = 2
-        if version != 2:
+        migrating = version == 2
+        if migrating:
+            data = {
+                **data,
+                "schema_version": 3,
+                "legacy_outbox_ids": [],
+                "market_baseline_pending": True,
+            }
+            version = 3
+        if version != 3:
             raise ModelValidationError(f"unsupported state schema version: {version!r}")
         fields = {
             "schema_version",
@@ -951,6 +963,8 @@ class WatcherState:
             "outbox",
             "image_delivery_windows",
             "last_run",
+            "legacy_outbox_ids",
+            "market_baseline_pending",
         }
         if "github" not in data and "github_cache" in data:
             legacy = _dict(data["github_cache"], "state.github_cache")
@@ -1020,6 +1034,50 @@ class WatcherState:
             raise ModelValidationError("state.plugins keys must match canonical_id")
         if any(key != batch.batch_id for key, batch in parsed_outbox.items()):
             raise ModelValidationError("state.outbox keys must match batch_id")
+        legacy_ids = list(
+            _str_tuple(data["legacy_outbox_ids"], "state.legacy_outbox_ids")
+        )
+        if migrating:
+            # Old payloads cannot prove their events survived source switching.
+            # Keep every unresolved production batch intact for explicit review.
+            legacy_ids = [
+                key
+                for key, batch in parsed_outbox.items()
+                if not key.startswith("diagnostic:outbox:")
+                and any(
+                    target.status is not DeliveryStatus.SENT
+                    for target in batch.targets.values()
+                )
+            ]
+            parsed_sources = {
+                key: source
+                for key, source in parsed_sources.items()
+                if key in {SourceKind.MARKET.value, SourceKind.GITHUB_DISCOVERY.value}
+            }
+            market = parsed_sources.get(SourceKind.MARKET.value)
+            meta_ids: set[str] = set()
+            if market:
+                for observations in [
+                    market.observations,
+                    *(snapshot.observations for snapshot in market.snapshots.values()),
+                ]:
+                    meta = observations.pop("$meta", None)
+                    if meta:
+                        meta_ids.add(meta.canonical_id)
+            parsed_plugins = {
+                key: plugin
+                for key, plugin in parsed_plugins.items()
+                if key not in meta_ids
+                and not any(
+                    evidence.source_kind is SourceKind.MARKET
+                    and evidence.source_record_id == "$meta"
+                    for evidence in plugin.evidence
+                )
+            }
+        if len(set(legacy_ids)) != len(legacy_ids) or any(
+            key not in parsed_outbox for key in legacy_ids
+        ):
+            raise ModelValidationError("state.legacy_outbox_ids must reference batches")
         return cls(
             schema_version=version,
             updated_at=_optional_str(data["updated_at"], "state.updated_at"),
@@ -1035,6 +1093,10 @@ class WatcherState:
             github=GitHubState.from_dict(data["github"], "state.github"),
             outbox=parsed_outbox,
             image_delivery_windows=parsed_windows,
+            legacy_outbox_ids=legacy_ids,
+            market_baseline_pending=_bool(
+                data["market_baseline_pending"], "state.market_baseline_pending"
+            ),
             last_run=_dict(data["last_run"], "state.last_run"),
         )
 

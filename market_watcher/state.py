@@ -1,8 +1,7 @@
-"""Strict schema-version 2 JSON state storage with recoverable atomic writes.
+"""Strict version 3 JSON storage with recoverable atomic writes.
 
-v1 state files are migrated explicitly on read: the per-target image delivery
-window map is added as empty and the schema version is bumped to 2.  Unknown
-v2 fields are still rejected.
+Versions 1 and 2 migrate on read; unresolved legacy notifications are quarantined
+and the Cloud baseline is established silently on its first successful fetch.
 """
 
 from __future__ import annotations
@@ -14,9 +13,8 @@ from typing import Any
 
 from .models import ModelValidationError, WatcherState
 
-SCHEMA_VERSION = 2
-# Legacy schema version accepted for explicit migration on load.
-MIGRATABLE_VERSION = 1
+SCHEMA_VERSION = 3
+MIGRATABLE_VERSIONS = (1, 2)
 
 
 class StateError(RuntimeError):
@@ -137,7 +135,7 @@ class JsonStateStore:
             raise ModelValidationError("state root or schema_version is invalid")
         version = data["schema_version"]
         if type(version) is not int or version not in (
-            MIGRATABLE_VERSION,
+            *MIGRATABLE_VERSIONS,
             SCHEMA_VERSION,
         ):
             raise StateVersionError(f"unsupported state schema version: {version!r}")

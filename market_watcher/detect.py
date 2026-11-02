@@ -1,4 +1,4 @@
-"""Pure MVP discovered/updated event detection."""
+"""Pure discovered/updated event detection for substantive plugin changes."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 from .models import ChangeEvent, ChangeKind, PluginRecord
 
 UPDATE_FIELDS = (
+    "name",
     "display_name",
     "description",
     "author",
@@ -15,9 +16,7 @@ UPDATE_FIELDS = (
     "astrbot_version",
     "platforms",
     "market_status",
-    "issue_state",
-    "issue_labels",
-    "archived",
+    "tags",
 )
 
 

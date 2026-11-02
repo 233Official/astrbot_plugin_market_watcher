@@ -10,7 +10,9 @@ from unittest import mock
 from market_watcher.config import parse_runtime_config
 from market_watcher.detect import detect_changes
 from market_watcher.github import (
+    ANONYMOUS_BUDGET,
     METADATA_PRIORITY_HEADER,
+    TOKEN_BUDGET,
     GitHubBudgetExceeded,
     GitHubGateway,
     GitHubMetadataService,
@@ -33,7 +35,6 @@ from market_watcher.outbox import validate_targets
 from market_watcher.scheduler import FixedDelayScheduler
 from market_watcher.service import MarketWatcherService
 from market_watcher.sources.github_search import SEARCH_ENDPOINT, GitHubSearchFetcher
-from market_watcher.sources.issues import COLLECTION_ISSUES_URL, IssuesFetcher
 from market_watcher.status import format_status
 
 NOW = "2026-07-20T12:00:00Z"
@@ -140,17 +141,33 @@ class GitHubGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_token_and_anonymous_budgets(self) -> None:
         token_gateway, _ = self.make_gateway(QueueHttp())
-        for index in range(20):
+        for index in range(TOKEN_BUDGET):
             await token_gateway.get(f"https://api.github.com/repos/a/{index}")
         with self.assertRaises(GitHubBudgetExceeded):
             await token_gateway.get("https://api.github.com/repos/a/overflow")
-        self.assertEqual(token_gateway.used, 20)
+        self.assertEqual(token_gateway.used, TOKEN_BUDGET)
 
         anonymous_gateway, _ = self.make_gateway(QueueHttp(), token="")
-        for index in range(5):
+        for index in range(ANONYMOUS_BUDGET):
             await anonymous_gateway.get(f"https://api.github.com/repos/a/{index}")
         with self.assertRaises(GitHubBudgetExceeded):
             await anonymous_gateway.get("https://api.github.com/repos/a/overflow")
+
+    async def test_discovery_and_metadata_share_budget_with_headroom(self) -> None:
+        inner = QueueHttp(
+            response(200, {"total_count": 0, "incomplete_results": False, "items": []}),
+            *(response(200, repo_payload()) for _ in range(21)),
+        )
+        gateway, _ = self.make_gateway(inner)
+        result = await GitHubSearchFetcher(gateway, clock=lambda: NOW).fetch()
+        self.assertTrue(result.success and result.complete, result.error_code)
+        for index in range(21):
+            await gateway.get(
+                f"https://api.github.com/repos/example/plugin-{index}",
+                headers={METADATA_PRIORITY_HEADER: "3"},
+            )
+        self.assertEqual(gateway.used, 22)
+        self.assertEqual(gateway.remaining, TOKEN_BUDGET - 22)
 
     async def test_concurrency_is_bounded_to_two(self) -> None:
         inner = QueueHttp()
@@ -199,14 +216,14 @@ class GitHubGatewayTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(inner.two_started.wait(), 1)
         self.assertEqual(len(inner.calls), 2)
         self.assertEqual(gateway.used, 2)
-        self.assertEqual(gateway.remaining, 3)
+        self.assertEqual(gateway.remaining, ANONYMOUS_BUDGET - 2)
         inner.release_rate_limit.set()
         await tasks[0]
         await asyncio.sleep(0)
         self.assertTrue(gateway.blocked)
         self.assertEqual(len(inner.calls), 2)
         self.assertEqual(gateway.used, 2)
-        self.assertEqual(gateway.remaining, 3)
+        self.assertEqual(gateway.remaining, ANONYMOUS_BUDGET - 2)
         inner.release_second.set()
         results = await asyncio.gather(*tasks[1:], return_exceptions=True)
         self.assertEqual(len(inner.calls), 2)
@@ -218,36 +235,52 @@ class GitHubGatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_priorities_are_classified(self) -> None:
         gateway, _ = self.make_gateway(QueueHttp())
         urls_and_headers = [
-            (
-                "https://api.github.com/repos/AstrBotDevs/AstrBot_Plugins_Collection/issues?page=1",
-                {},
-            ),
-            ("https://api.github.com/repos/AstrBotDevs/AstrBot/issues?page=1", {}),
-            ("https://api.github.com/repos/a/b", {METADATA_PRIORITY_HEADER: "2"}),
+            ("https://api.github.com/repos/a/urgent", {METADATA_PRIORITY_HEADER: "2"}),
             ("https://api.github.com/repos/c/d", {METADATA_PRIORITY_HEADER: "3"}),
             ("https://api.github.com/search/repositories?page=1", {}),
             ("https://api.github.com/search/repositories?page=2", {}),
         ]
         for url, headers in urls_and_headers:
             await gateway.get(url, headers=headers)
-        self.assertEqual(gateway.request_priorities, [0, 1, 2, 3, 4, 5])
+        self.assertEqual(gateway.request_priorities, [2, 3, 4, 5])
 
-    async def test_issue_pagination_consumes_shared_budget_per_page(self) -> None:
-        page_two = COLLECTION_ISSUES_URL.replace("&page=1", "&page=2")
+    async def test_discovery_pagination_consumes_shared_budget_per_page(self) -> None:
+        def repository(index):
+            return {
+                "id": index,
+                "name": f"astrbot_plugin_{index}",
+                "full_name": f"Example/astrbot_plugin_{index}",
+                "html_url": f"https://github.com/Example/astrbot_plugin_{index}",
+                "owner": {"login": "Example"},
+                "private": False,
+                "fork": False,
+                "archived": False,
+            }
+
         inner = QueueHttp(
-            response(200, [], headers={"Link": f'<{page_two}>; rel="next"'}),
-            response(200, []),
+            response(
+                200,
+                {
+                    "total_count": 101,
+                    "incomplete_results": False,
+                    "items": [repository(index) for index in range(1, 101)],
+                },
+            ),
+            response(
+                200,
+                {
+                    "total_count": 101,
+                    "incomplete_results": False,
+                    "items": [repository(101)],
+                },
+            ),
         )
         gateway, _ = self.make_gateway(inner)
-        result = await IssuesFetcher(
-            gateway,
-            source_kind=SourceKind.COLLECTION_ISSUE,
-            clock=lambda: NOW,
-        ).fetch()
+        result = await GitHubSearchFetcher(gateway, clock=lambda: NOW).fetch()
         self.assertTrue(result.complete, result.error_code)
         self.assertEqual(result.pages_fetched, 2)
         self.assertEqual(gateway.used, 2)
-        self.assertEqual(gateway.request_priorities, [0, 0])
+        self.assertEqual(gateway.request_priorities, [4, 5])
 
     async def test_401_disables_token_without_leaking_it(self) -> None:
         inner = QueueHttp(response(401), response(200))
@@ -257,7 +290,7 @@ class GitHubGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Authorization", inner.calls[0][1])
         self.assertNotIn("Authorization", inner.calls[1][1])
         self.assertEqual(state.github.rate_limit.error_code, "github_auth_failed")
-        self.assertLessEqual(gateway.remaining, 3)
+        self.assertEqual(gateway.remaining, ANONYMOUS_BUDGET - 2)
 
     async def test_403_rate_limit_and_429_block_followups_without_sleep(self) -> None:
         gateway, state = self.make_gateway(
@@ -466,14 +499,14 @@ class GitHubMetadataTests(unittest.IsolatedAsyncioTestCase):
             canonical_id: PluginRecord(canonical_id, canonical_id.rsplit("/", 1)[-1])
             for canonical_id in [*normal_ids, event_id]
         }
-        inner = QueueHttp(*(response(200, repo_payload()) for _ in range(5)))
+        inner = QueueHttp(*(response(200, repo_payload()) for _ in range(len(plugins))))
         service, gateway, state = self.setup_service(inner, token="")
         await service.enrich(state, plugins, {event_id}, include_star_count=True)
         requested = [url for url, _ in inner.calls]
-        self.assertEqual(len(requested), 5)
+        self.assertEqual(len(requested), len(plugins))
         self.assertTrue(requested[0].endswith("/repos/z/event"))
         self.assertEqual(gateway.request_priorities[0], 2)
-        self.assertEqual(gateway.request_priorities[1:], [3, 3, 3, 3])
+        self.assertEqual(gateway.request_priorities[1:], [3] * len(normal_ids))
 
     async def test_metadata_star_change_does_not_create_event(self) -> None:
         old = PluginRecord("github:a/b", "b", stars=1)
@@ -657,90 +690,6 @@ class GitHubMetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(notifier.calls), 1)
         self.assertIn("Star：42（缓存于", notifier.calls[0][1])
 
-    async def test_silent_baselines_are_not_urgent_before_real_update(self) -> None:
-        def observation(
-            kind: SourceKind, record_id: str, canonical_id: str, version: str
-        ) -> SourceObservation:
-            owner, name = canonical_id.removeprefix("github:").split("/", 1)
-            return SourceObservation(
-                source_kind=kind,
-                source_record_id=record_id,
-                source_url=f"https://github.com/{owner}/{name}",
-                observed_at=NOW,
-                fetched_from=f"https://source.invalid/{kind.value}",
-                canonical_id=canonical_id,
-                repo_url=f"https://github.com/{owner}/{name}",
-                repo_owner=owner,
-                repo_name=name,
-                name=name,
-                version=version,
-                observation_hash=f"hash:{kind.value}:{record_id}:{version}",
-            )
-
-        event_id = "github:z/updated"
-        old = observation(SourceKind.MARKET, "updated", event_id, "1.0.0")
-        current = observation(SourceKind.MARKET, "updated", event_id, "2.0.0")
-        cold = [
-            observation(
-                SourceKind.COLLECTION_ISSUE,
-                f"cold-{index}",
-                f"github:a/cold-{index}",
-                "1.0.0",
-            )
-            for index in range(8)
-        ]
-        old_market = SourceState(
-            baseline_established=True,
-            complete=True,
-            observations={old.source_record_id: old},
-        )
-        state = WatcherState(
-            sources={SourceKind.MARKET.value: old_market},
-            plugins=merge_sources({SourceKind.MARKET.value: old_market}),
-        )
-        inner = QueueHttp(*(response(200, repo_payload()) for _ in range(5)))
-        auth = GitHubAuthHttpClient(inner, "")
-        gateway = GitHubGateway(auth, auth)
-        service = MarketWatcherService(
-            store=MemoryStore(state),
-            fetchers={
-                SourceKind.COLLECTION_ISSUE: OneFetcher(
-                    FetchResult(
-                        SourceKind.COLLECTION_ISSUE,
-                        True,
-                        True,
-                        observations=cold,
-                        endpoint="https://source.invalid/collection",
-                        pages_fetched=1,
-                    )
-                ),
-                SourceKind.MARKET: OneFetcher(
-                    FetchResult(
-                        SourceKind.MARKET,
-                        True,
-                        True,
-                        observations=[current],
-                        endpoint="https://source.invalid/market",
-                        pages_fetched=1,
-                    )
-                ),
-            },
-            notifier=RecordingNotifier(),
-            github_gateway=gateway,
-            github_metadata=GitHubMetadataService(gateway, gateway, clock=lambda: NOW),
-            clock=lambda: NOW,
-        )
-        report = await service.check(
-            enabled_sources={SourceKind.COLLECTION_ISSUE, SourceKind.MARKET},
-            push_targets=[],
-            max_items_per_push=10,
-        )
-        self.assertEqual(report.updated, 1)
-        self.assertEqual(report.discovered, 0)
-        self.assertEqual(len(inner.calls), 5)
-        self.assertTrue(inner.calls[0][0].endswith("/repos/z/updated"))
-        self.assertEqual(gateway.request_priorities, [2, 3, 3, 3, 3])
-
 
 class ConfigSchedulerTests(unittest.IsolatedAsyncioTestCase):
     def test_ai_timeout_defaults_bounds_and_invalid_values(self) -> None:
@@ -857,7 +806,7 @@ class ConfigSchedulerTests(unittest.IsolatedAsyncioTestCase):
         )
         text = format_status(
             runtime=runtime,
-            enabled_sources={SourceKind.MARKET, SourceKind.COLLECTION_ISSUE},
+            enabled_sources={SourceKind.MARKET},
             scheduler_state="disabled",
             scheduler_last_attempt=NOW,
             scheduler_last_success=LATER,
@@ -893,8 +842,7 @@ class ConfigSchedulerTests(unittest.IsolatedAsyncioTestCase):
             f"- 检查调度上次成功：{LATER}",
             "- 检查调度错误：run_skipped_busy",
             "- 状态 schema_version：1",
-            "- 来源开关：market=enabled, collection_issue=enabled, "
-            "legacy_publish_issue=disabled, github_discovery=disabled",
+            "- 来源开关：market=enabled, github_discovery=disabled",
             "- GitHub Token：已配置",
             "- 配置目标数：1",
             "- 群订阅数：2",

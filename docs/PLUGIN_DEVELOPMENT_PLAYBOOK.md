@@ -82,8 +82,8 @@
 
 ## 来源 Fixture 与网络边界
 
-- 四类来源分别是市场 API 或 `plugins.json`、插件 Collection Issues、主仓历史 `plugin-publish` Issues，以及低频 GitHub 全局发现。
-- `tests/fixtures/` 保存正常、分页、不完整、字段损坏和 fallback 等离线样本；来源适配器测试通过可注入 `HttpClient` 读取 fixture，不访问真实 API。
+- Cloud 是唯一市场事实来源，无旧目录回退；可选独立 GitHub 搜索仍受共享预算保护，元数据补充不扩展市场清单。
+- `tests/fixtures/` 保存 Cloud、独立搜索的正常、分页、不完整和字段损坏离线样本；适配器测试通过可注入 `HttpClient` 读取 fixture，不访问真实 API。
 - 默认单元测试不得依赖 GitHub Token、真实 AstrBot、真实 UMO、LLM Provider 或外部网络。真实 AstrBot 集成测试在宿主不可用时按现有契约跳过。
 - 新增网络行为时应先扩展 HTTP 边界与 fixture，覆盖响应大小、分页、限流、认证主机约束和降级，再安排受控线上 canary。
 

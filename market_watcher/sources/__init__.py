@@ -1,7 +1,6 @@
-"""M1 source adapters."""
+"""Supported Cloud market and independent GitHub discovery adapters."""
 
 from .github_search import GitHubSearchFetcher
-from .issues import IssuesFetcher
 from .market import MarketFetcher
 
-__all__ = ["GitHubSearchFetcher", "IssuesFetcher", "MarketFetcher"]
+__all__ = ["GitHubSearchFetcher", "MarketFetcher"]

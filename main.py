@@ -35,10 +35,14 @@ if __package__:
     from .market_watcher.scheduler import DrainScheduler, FixedDelayScheduler
     from .market_watcher.service import MarketWatcherService
     from .market_watcher.sources.github_search import GitHubSearchFetcher
-    from .market_watcher.sources.issues import IssuesFetcher
     from .market_watcher.sources.market import MarketFetcher
     from .market_watcher.state import JsonStateStore, StateError
-    from .market_watcher.status import format_status
+    from .market_watcher.status import (
+        collect_state_diagnostics,
+        format_source_states,
+        format_status,
+        unavailable_state_diagnostics,
+    )
     from .market_watcher.subscriptions import subscription_status, update_subscription
 else:
     from market_watcher.ai import AI_DIAGNOSTIC_FACTS, AiIntroService
@@ -69,18 +73,25 @@ else:
     from market_watcher.scheduler import DrainScheduler, FixedDelayScheduler
     from market_watcher.service import MarketWatcherService
     from market_watcher.sources.github_search import GitHubSearchFetcher
-    from market_watcher.sources.issues import IssuesFetcher
     from market_watcher.sources.market import MarketFetcher
     from market_watcher.state import JsonStateStore, StateError
-    from market_watcher.status import format_status
+    from market_watcher.status import (
+        collect_state_diagnostics,
+        format_source_states,
+        format_status,
+        unavailable_state_diagnostics,
+    )
     from market_watcher.subscriptions import subscription_status, update_subscription
+
+
+PLUGIN_VERSION = "1.1.1"
 
 
 @register(
     "astrbot_plugin_market_watcher",
     "233Official",
     "聚合 AstrBot 插件市场与 GitHub 发布信号的监控插件",
-    "1.1.1",
+    PLUGIN_VERSION,  # release contract marker: , "1.1.1")
 )
 class MarketWatcherPlugin(Star):
     """M3 market checks with manual commands and fixed-delay scheduling."""
@@ -122,14 +133,6 @@ class MarketWatcherPlugin(Star):
         self._http = github_gateway
         fetchers = {
             SourceKind.MARKET: MarketFetcher(self._http),
-            SourceKind.COLLECTION_ISSUE: IssuesFetcher(
-                self._http,
-                source_kind=SourceKind.COLLECTION_ISSUE,
-            ),
-            SourceKind.LEGACY_PUBLISH_ISSUE: IssuesFetcher(
-                self._http,
-                source_kind=SourceKind.LEGACY_PUBLISH_ISSUE,
-            ),
             SourceKind.GITHUB_DISCOVERY: GitHubSearchFetcher(self._http),
         }
         # Renderer diagnostic – observe, do not guess
@@ -195,6 +198,14 @@ class MarketWatcherPlugin(Star):
             ai_intro=self._ai_intro,
             observer=self._observe_run,
         )
+        migration = await self._service.prepare_migration()
+        if migration["quarantined_batches"] > 0:
+            logger.warning(
+                "[MarketWatcher] 旧生产队列已隔离保留，不会自动重放；"
+                "请管理员审查备份后使用 marketwatch migration 查看，"
+                "并明确选择 migration_release 或 migration_discard（批次数=%s）",
+                migration["quarantined_batches"],
+            )
         self._scheduler = FixedDelayScheduler(
             self._automatic_check,
             lambda: self._runtime().poll_interval_minutes * 60,
@@ -213,7 +224,10 @@ class MarketWatcherPlugin(Star):
         # The drain scheduler always runs: overflow pages must be delivered
         # even when automatic checking is disabled.
         self._drain_scheduler.start()
-        logger.info("[MarketWatcher] M3 市场检查与 fixed-delay 调度已就绪")
+        logger.info(
+            "[MarketWatcher] M3 市场检查与 fixed-delay 调度已就绪 version=%s",
+            PLUGIN_VERSION,
+        )
 
     async def terminate(self) -> None:
         # Stop the drain scheduler first so no new outbox work can be started,
@@ -269,8 +283,10 @@ class MarketWatcherPlugin(Star):
             yield event.plain_result("市场观察器尚未完成初始化。")
             return
         runtime = self._runtime()
+        state_diagnostics = unavailable_state_diagnostics(self._store.path)
         try:
             state = self._store.load()
+            state_diagnostics = collect_state_diagnostics(state, self._store.path)
             health = "正常"
             schema_version = str(state.schema_version)
             plugin_count = len(state.plugins)
@@ -292,14 +308,7 @@ class MarketWatcherPlugin(Star):
                 )
                 or "无"
             )
-            source_states = (
-                ", ".join(
-                    f"{key}:"
-                    f"{'ok' if value.complete else value.error_code or 'incomplete'}"
-                    for key, value in sorted(state.sources.items())
-                )
-                or "暂无"
-            )
+            source_states = format_source_states(state.sources)
             github_remaining = state.github.rate_limit.remaining
             github_reset = state.github.rate_limit.reset_at or "未知"
             github_cache_count = len(state.github.repos)
@@ -397,7 +406,56 @@ class MarketWatcherPlugin(Star):
                 throttled=throttled,
                 next_drain=next_drain,
                 last_text=last_text,
+                plugin_version=PLUGIN_VERSION,
+                state_diagnostics=state_diagnostics,
             )
+        )
+
+    @marketwatch.command("migration")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def migration(self, event: AstrMessageEvent):
+        if self._service is None:
+            yield event.plain_result("市场观察器尚未完成初始化。")
+            return
+        try:
+            status = await self._service.migration_status()
+        except (StateError, OSError, ValueError):
+            yield event.plain_result("迁移状态不可用，请检查状态文件。")
+            return
+        yield event.plain_result(
+            f"隔离旧批次：{status['quarantined_batches']}\n"
+            f"Cloud 静默基线待建立：{'是' if status['baseline_pending'] else '否'}\n"
+            "旧队列不会自动重放。审查备份后，管理员可明确选择 "
+            "migration_release 恢复或 migration_discard 丢弃隔离队列；"
+            "只影响隔离批次，保留已发送状态。"
+        )
+
+    @marketwatch.command("migration_release")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def migration_release(self, event: AstrMessageEvent):
+        async for result in self._resolve_migration(event, action="release"):
+            yield result
+
+    @marketwatch.command("migration_discard")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def migration_discard(self, event: AstrMessageEvent):
+        async for result in self._resolve_migration(event, action="discard"):
+            yield result
+
+    async def _resolve_migration(self, event: AstrMessageEvent, *, action: str):
+        if self._service is None:
+            yield event.plain_result("市场观察器尚未完成初始化。")
+            return
+        try:
+            status = await self._service.resolve_legacy_outbox(action)
+        except (StateError, OSError, ValueError):
+            yield event.plain_result("旧队列处置失败，未确认成功；请检查状态文件。")
+            return
+        self._wake_drain()
+        outcome = "恢复投递" if action == "release" else "丢弃未发送投递"
+        yield event.plain_result(
+            f"已明确选择{outcome}，仅处理隔离批次并保留已发送状态。\n"
+            f"剩余隔离批次：{status['quarantined_batches']}"
         )
 
     @marketwatch.command("check")
@@ -760,8 +818,6 @@ class MarketWatcherPlugin(Star):
     def _enabled_sources(self) -> set[SourceKind]:
         mapping = {
             "source_market_api": SourceKind.MARKET,
-            "source_collection_issues": SourceKind.COLLECTION_ISSUE,
-            "source_plugin_publish_issues": SourceKind.LEGACY_PUBLISH_ISSUE,
             "source_github_discovery": SourceKind.GITHUB_DISCOVERY,
         }
         return {
@@ -801,7 +857,7 @@ class MarketWatcherPlugin(Star):
     def _observe_run(payload: dict) -> None:
         logger.info(
             "[MarketWatcher] run=%s phase=%s duration_ms=%s events=%s "
-            "sources_ok=%s sources_failed=%s error_code=%s",
+            "sources_ok=%s sources_failed=%s error_code=%s source_errors=%s",
             payload.get("run_id"),
             payload.get("phase"),
             payload.get("duration_ms"),
@@ -809,6 +865,7 @@ class MarketWatcherPlugin(Star):
             payload.get("sources_succeeded"),
             payload.get("sources_failed"),
             payload.get("error_code"),
+            payload.get("source_errors"),
         )
 
     @staticmethod

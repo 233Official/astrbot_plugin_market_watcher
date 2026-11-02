@@ -25,7 +25,9 @@ from .models import (
 )
 from .normalize import utc_now
 from .outbox import (
+    OUTBOX_DIAGNOSTIC_PREFIX,
     Notifier,
+    compact_terminal_batches,
     count_exhausted,
     count_pending,
     count_throttled,
@@ -36,8 +38,8 @@ from .outbox import (
     validate_targets,
 )
 from .state import StateError
+from .status import format_source_errors
 
-OUTBOX_DIAGNOSTIC_PREFIX = "diagnostic:outbox:"
 OUTBOX_DIAGNOSTIC_HOLD = "9999-12-31T23:59:59Z"
 
 
@@ -49,6 +51,17 @@ class Store(Protocol):
     def load(self) -> WatcherState: ...
 
     def save(self, state: WatcherState) -> None: ...
+
+
+class _CompactingSaver:
+    """Persist delivery mutations after compacting terminal production work."""
+
+    def __init__(self, store: Store) -> None:
+        self.store = store
+
+    def save(self, state: WatcherState) -> None:
+        compact_terminal_batches(state)
+        self.store.save(state)
 
 
 class MarketWatcherService:
@@ -76,6 +89,38 @@ class MarketWatcherService:
         self.observer = observer or (lambda payload: None)
         self.lock = asyncio.Lock()
         self.last_report: RunReport | None = None
+
+    async def prepare_migration(self) -> dict[str, Any]:
+        """Checkpoint schema migration before any background delivery starts."""
+        async with self.lock:
+            state = self.store.load()
+            self.store.save(state)
+            return _migration_status(state)
+
+    async def migration_status(self) -> dict[str, Any]:
+        async with self.lock:
+            return _migration_status(self.store.load())
+
+    async def resolve_legacy_outbox(self, action: str) -> dict[str, Any]:
+        """Resolve only quarantined legacy work, without resetting retry state."""
+        if action not in {"release", "discard"}:
+            raise ValueError("expected release or discard")
+        async with self.lock:
+            state = self.store.load()
+            affected = len(state.legacy_outbox_ids)
+            if action == "discard":
+                for batch_id in state.legacy_outbox_ids:
+                    batch = state.outbox[batch_id]
+                    batch.targets = {
+                        key: target
+                        for key, target in batch.targets.items()
+                        if target.status is DeliveryStatus.SENT
+                    }
+                    if not batch.targets:
+                        del state.outbox[batch_id]
+            state.legacy_outbox_ids = []
+            self.store.save(state)
+            return {**_migration_status(state), "affected_batches": affected}
 
     async def prepare_outbox_diagnostic(self, target: str) -> dict[str, int]:
         clean_targets, invalid = validate_targets([target])
@@ -122,15 +167,21 @@ class MarketWatcherService:
         """
         async with self.lock:
             state = self.store.load()
+            initial_compaction = compact_terminal_batches(state)
+            if initial_compaction.changed:
+                self.store.save(state)
+            saver = _CompactingSaver(self.store)
             sent, pending = await deliver_pending(
                 state,
-                self.store,
+                saver,
                 self.notifier,
                 now=self.clock(),
                 clock=self.clock,
                 max_images_per_delivery=max_images_per_delivery,
                 image_send_interval_seconds=image_send_interval_seconds,
             )
+            if compact_terminal_batches(state).changed:
+                saver.save(state)
             now = self.clock()
             throttled = count_throttled(
                 state,
@@ -189,7 +240,7 @@ class MarketWatcherService:
                 self.store.save(state)
             sent, _ = await deliver_pending(
                 state,
-                self.store,
+                _CompactingSaver(self.store),
                 self.notifier,
                 now=self.clock(),
                 clock=self.clock,
@@ -290,9 +341,10 @@ class MarketWatcherService:
             return report
 
         try:
+            compact_terminal_batches(state)
             save_started = self.monotonic()
             self.store.save(state)
-            self._record_phase(report, "save", save_started)
+            self._record_phase(report, "save", save_started, state=state)
         except (StateError, OSError, ValueError):
             report.status = "state_save_failed"
             report.error_code = "state_save_failed"
@@ -300,17 +352,18 @@ class MarketWatcherService:
             return report
 
         try:
+            saver = _CompactingSaver(self.store)
             deliver_started = self.monotonic()
             sent, _ = await deliver_pending(
                 state,
-                self.store,
+                saver,
                 self.notifier,
                 now=self.clock(),
                 clock=self.clock,
                 max_images_per_delivery=max_images_per_delivery,
                 image_send_interval_seconds=image_send_interval_seconds,
             )
-            self._record_phase(report, "deliver", deliver_started)
+            self._record_phase(report, "deliver", deliver_started, state=state)
         except (StateError, OSError, ValueError):
             report.status = "delivery_state_save_failed"
             report.error_code = "state_save_failed_after_delivery"
@@ -331,12 +384,9 @@ class MarketWatcherService:
 
         previous_plugins = deepcopy(state.plugins)
         baseline_sources: set[SourceKind] = set()
+        rebased_market_ids: set[str] = set()
         successful = attempted = 0
-        source_order = (
-            SourceKind.COLLECTION_ISSUE,
-            SourceKind.LEGACY_PUBLISH_ISSUE,
-            SourceKind.MARKET,
-        )
+        source_order = (SourceKind.MARKET,)
         fetch_started = self.monotonic()
         for kind in source_order:
             if kind not in enabled_sources:
@@ -356,8 +406,13 @@ class MarketWatcherService:
                 report.observations += len(result.observations)
                 if not (old_state and old_state.baseline_established):
                     baseline_sources.add(kind)
+                if kind is SourceKind.MARKET and state.market_baseline_pending:
+                    rebased_market_ids.update(
+                        item.canonical_id for item in result.observations
+                    )
+                    baseline_sources.add(kind)
+                    state.market_baseline_pending = False
                 _record_aliases(state, old_state, result)
-                snapshots = deepcopy(old_state.snapshots) if old_state else {}
                 snapshot = EndpointSnapshot(
                     endpoint=result.endpoint,
                     pages_fetched=max(1, result.pages_fetched),
@@ -367,13 +422,12 @@ class MarketWatcherService:
                         item.source_record_id: item for item in result.observations
                     },
                 )
-                snapshots[result.endpoint] = snapshot
                 state.sources[kind.value] = SourceState(
                     baseline_established=True,
                     last_success_at=self.clock(),
                     complete=True,
                     observations=snapshot.observations,
-                    snapshots=snapshots,
+                    snapshots={result.endpoint: snapshot},
                 )
             else:
                 report.sources_failed += 1
@@ -388,14 +442,15 @@ class MarketWatcherService:
                         complete=False,
                         error_code=result.error_code or "fetch_failed",
                     )
-        self._record_phase(report, "fetch", fetch_started)
+        self._record_phase(report, "fetch", fetch_started, state=state)
 
         merge_started = self.monotonic()
         previous_plugins = _resolve_previous_plugins(previous_plugins, state.id_aliases)
-        state.plugins = merge_sources(
-            deepcopy(state.sources), previous_plugins, state.id_aliases
-        )
-        self._record_phase(report, "merge", merge_started)
+        if successful:
+            state.plugins = merge_sources(
+                deepcopy(state.sources), previous_plugins, state.id_aliases
+            )
+        self._record_phase(report, "merge", merge_started, state=state)
         detect_started = self.monotonic()
         preliminary_events = (
             detect_changes(previous_plugins, state.plugins, detected_at=self.clock())
@@ -403,9 +458,14 @@ class MarketWatcherService:
             else []
         )
         preliminary_events = _filter_silent_baselines(
-            preliminary_events, baseline_sources
+            [
+                event
+                for event in preliminary_events
+                if event.canonical_id not in rebased_market_ids
+            ],
+            baseline_sources,
         )
-        self._record_phase(report, "detect", detect_started)
+        self._record_phase(report, "detect", detect_started, state=state)
         if self.github_metadata:
             github_started = self.monotonic()
             await self.github_metadata.enrich(
@@ -414,7 +474,7 @@ class MarketWatcherService:
                 {event.canonical_id for event in preliminary_events},
                 include_star_count=include_star_count,
             )
-            self._record_phase(report, "github", github_started)
+            self._record_phase(report, "github", github_started, state=state)
 
         if SourceKind.GITHUB_DISCOVERY in enabled_sources:
             kind = SourceKind.GITHUB_DISCOVERY
@@ -467,12 +527,12 @@ class MarketWatcherService:
                             complete=False,
                             error_code=result.error_code or "fetch_failed",
                         )
-                self._record_phase(report, "fetch", fetch_started)
+                self._record_phase(report, "fetch", fetch_started, state=state)
                 merge_started = self.monotonic()
                 state.plugins = merge_sources(
                     deepcopy(state.sources), state.plugins, state.id_aliases
                 )
-                self._record_phase(report, "merge", merge_started)
+                self._record_phase(report, "merge", merge_started, state=state)
                 if self.github_metadata:
                     github_started = self.monotonic()
                     self.github_metadata.apply_cache(
@@ -480,15 +540,22 @@ class MarketWatcherService:
                         state.plugins,
                         include_star_count=include_star_count,
                     )
-                    self._record_phase(report, "github", github_started)
+                    self._record_phase(report, "github", github_started, state=state)
         events = []
         if attempted and successful:
             detect_started = self.monotonic()
             events = detect_changes(
                 previous_plugins, state.plugins, detected_at=self.clock()
             )
-            events = _filter_silent_baselines(events, baseline_sources)
-            self._record_phase(report, "detect", detect_started)
+            events = _filter_silent_baselines(
+                [
+                    event
+                    for event in events
+                    if event.canonical_id not in rebased_market_ids
+                ],
+                baseline_sources,
+            )
+            self._record_phase(report, "detect", detect_started, state=state)
 
         report.discovered = sum(event.kind.value == "discovered" for event in events)
         report.updated = sum(event.kind.value == "updated" for event in events)
@@ -513,7 +580,7 @@ class MarketWatcherService:
             report.ai_status = ai_result.status
             report.ai_error_code = ai_result.error_code
             intro = ai_result.intro
-        self._record_phase(report, "ai", ai_started)
+        self._record_phase(report, "ai", ai_started, state=state)
         batches = create_batches(
             events,
             valid_targets,
@@ -546,7 +613,7 @@ class MarketWatcherService:
         try:
             save_started = self.monotonic()
             self.store.save(state)
-            self._record_phase(report, "save", save_started)
+            self._record_phase(report, "save", save_started, state=state)
         except (StateError, OSError, ValueError):
             report.status = "state_save_failed"
             report.error_code = "state_save_failed"
@@ -555,14 +622,14 @@ class MarketWatcherService:
             deliver_started = self.monotonic()
             sent, _ = await deliver_pending(
                 state,
-                self.store,
+                _CompactingSaver(self.store),
                 self.notifier,
                 now=self.clock(),
                 clock=self.clock,
                 max_images_per_delivery=max_images_per_delivery,
                 image_send_interval_seconds=image_send_interval_seconds,
             )
-            self._record_phase(report, "deliver", deliver_started)
+            self._record_phase(report, "deliver", deliver_started, state=state)
         except (StateError, OSError, ValueError):
             report.status = "delivery_state_save_failed"
             report.error_code = "state_save_failed_after_delivery"
@@ -576,16 +643,16 @@ class MarketWatcherService:
         try:
             save_started = self.monotonic()
             self.store.save(state)
-            self._record_phase(report, "save", save_started)
+            self._record_phase(report, "save", save_started, state=state)
         except (StateError, OSError, ValueError):
             report.status = "delivery_state_save_failed"
             report.error_code = "state_save_failed_after_delivery"
             report.finished_at = self.clock()
-            self._record_phase(report, "overall", overall_started)
+            self._record_phase(report, "overall", overall_started, state=state)
             return report
         report.finished_at = self.clock()
         state.updated_at = report.finished_at
-        self._record_phase(report, "overall", overall_started)
+        self._record_phase(report, "overall", overall_started, state=state)
         state.last_run = report.to_dict()
         try:
             self.store.save(state)
@@ -594,7 +661,14 @@ class MarketWatcherService:
             report.error_code = "state_save_failed_after_delivery"
         return report
 
-    def _record_phase(self, report: RunReport, phase: str, started: float) -> None:
+    def _record_phase(
+        self,
+        report: RunReport,
+        phase: str,
+        started: float,
+        *,
+        state: WatcherState | None = None,
+    ) -> None:
         duration = max(0, int(round((self.monotonic() - started) * 1000)))
         if phase == "overall":
             measured_phases = sum(
@@ -614,6 +688,7 @@ class MarketWatcherService:
             "error_code": report.error_code
             or report.ai_error_code
             or report.github_error_code,
+            "source_errors": format_source_errors(state.sources) if state else "",
         }
         try:
             self.observer(payload)
@@ -736,3 +811,10 @@ def _resolve_previous_plugins(plugins, aliases):
         copied.content_hash = copied.compute_content_hash()
         resolved[target] = copied
     return resolved
+
+
+def _migration_status(state: WatcherState) -> dict[str, Any]:
+    return {
+        "quarantined_batches": len(state.legacy_outbox_ids),
+        "baseline_pending": state.market_baseline_pending,
+    }

@@ -117,6 +117,28 @@ class FakeFetcher:
 
 
 class MergeDetectTests(unittest.TestCase):
+    def test_missing_market_entry_keeps_authoritative_empty_fields(self) -> None:
+        market = observation(SourceKind.MARKET, "market", description=None, tags=())
+        baseline = merge_sources({SourceKind.MARKET.value: source_state(market)})
+        discovery = observation(
+            SourceKind.GITHUB_DISCOVERY,
+            "discovery",
+            description="Repository description",
+            tags=("repository-tag",),
+        )
+        missing = merge_sources(
+            {SourceKind.GITHUB_DISCOVERY.value: source_state(discovery)},
+            baseline,
+        )
+        self.assertIsNone(missing[market.canonical_id].description)
+        self.assertEqual(missing[market.canonical_id].tags, ())
+        self.assertEqual(detect_changes(baseline, missing, detected_at=NOW), [])
+        recovered = merge_sources(
+            {SourceKind.MARKET.value: source_state(market)},
+            missing,
+        )
+        self.assertEqual(detect_changes(missing, recovered, detected_at=LATER), [])
+
     def test_priority_evidence_and_sparse_preserve(self) -> None:
         market = observation(
             SourceKind.MARKET,
@@ -124,16 +146,16 @@ class MergeDetectTests(unittest.TestCase):
             description="市场描述",
             author="市场作者",
         )
-        collection = observation(
-            SourceKind.COLLECTION_ISSUE,
-            "issue",
-            description="Issue 描述",
+        discovery = observation(
+            SourceKind.GITHUB_DISCOVERY,
+            "discovery",
+            description="GitHub 描述",
             version="2.0.0",
         )
         merged = merge_sources(
             {
                 SourceKind.MARKET.value: source_state(market),
-                SourceKind.COLLECTION_ISSUE.value: source_state(collection),
+                SourceKind.GITHUB_DISCOVERY.value: source_state(discovery),
             }
         )
         record = next(iter(merged.values()))
@@ -167,8 +189,9 @@ class MergeDetectTests(unittest.TestCase):
             observed_at=NOW,
         )
         non_substantive = deepcopy(old)
-        non_substantive.name = "new-name"
-        non_substantive.tags = ("new",)
+        non_substantive.forks = 45
+        non_substantive.archived = True
+        non_substantive.repo_updated_at = LATER
         non_substantive.stars = 999
         non_substantive.observed_at = LATER
         self.assertEqual(
@@ -182,6 +205,8 @@ class MergeDetectTests(unittest.TestCase):
         updated = deepcopy(non_substantive)
         updated.version = "2.0.0"
         updated.description = "new"
+        updated.name = "new-name"
+        updated.tags = ("new",)
         events = detect_changes(
             {old.canonical_id: old},
             {old.canonical_id: updated},
@@ -189,7 +214,9 @@ class MergeDetectTests(unittest.TestCase):
         )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].kind, ChangeKind.UPDATED)
-        self.assertEqual(events[0].changed_fields, ("description", "version"))
+        self.assertEqual(
+            events[0].changed_fields, ("name", "description", "version", "tags")
+        )
         self.assertEqual(
             events[0].event_id,
             detect_changes(
@@ -199,11 +226,11 @@ class MergeDetectTests(unittest.TestCase):
 
     def test_same_plugin_from_two_sources_folds_to_one_event(self) -> None:
         market = observation(SourceKind.MARKET, "m")
-        issue = observation(SourceKind.COLLECTION_ISSUE, "i")
+        discovery = observation(SourceKind.GITHUB_DISCOVERY, "i")
         merged = merge_sources(
             {
                 SourceKind.MARKET.value: source_state(market),
-                SourceKind.COLLECTION_ISSUE.value: source_state(issue),
+                SourceKind.GITHUB_DISCOVERY.value: source_state(discovery),
             }
         )
         events = detect_changes({}, merged, detected_at=NOW)
@@ -218,10 +245,10 @@ class MergeDetectTests(unittest.TestCase):
             description="market",
         )
         second = observation(
-            SourceKind.COLLECTION_ISSUE,
+            SourceKind.GITHUB_DISCOVERY,
             "c",
-            canonical_id="source:collection_issue:second",
-            description="collection",
+            canonical_id="source:github_discovery:second",
+            description="discovery",
         )
         aliases = {
             first.canonical_id: "github:example/demo",
@@ -231,12 +258,66 @@ class MergeDetectTests(unittest.TestCase):
         merged = merge_sources(
             {
                 SourceKind.MARKET.value: source_state(first),
-                SourceKind.COLLECTION_ISSUE.value: source_state(second),
+                SourceKind.GITHUB_DISCOVERY.value: source_state(second),
             },
             aliases=aliases,
         )
         self.assertEqual(set(merged), {"github:example/demo"})
         self.assertEqual(len(merged["github:example/demo"].evidence), 2)
+
+    def test_missing_plugins_keep_identity_values_and_aliases_converge(self) -> None:
+        fallback = observation(
+            SourceKind.MARKET,
+            "slug",
+            canonical_id="source:market:slug",
+            description="last known description",
+        )
+        previous = merge_sources({SourceKind.MARKET.value: source_state(fallback)})
+        retained = merge_sources({}, previous)
+        self.assertEqual(retained, previous)
+        resolved = merge_sources(
+            {},
+            retained,
+            aliases={"source:market:slug": "github:example/resolved"},
+        )
+        self.assertEqual(set(resolved), {"github:example/resolved"})
+        self.assertEqual(
+            resolved["github:example/resolved"].description, "last known description"
+        )
+
+    def test_cloud_can_clear_fields_without_discovery_override(self) -> None:
+        old = observation(
+            SourceKind.MARKET, "m", platforms=("telegram",), tags=("工具",)
+        )
+        previous = merge_sources({SourceKind.MARKET.value: source_state(old)})
+        current = merge_sources(
+            {
+                SourceKind.MARKET.value: source_state(
+                    observation(
+                        SourceKind.MARKET,
+                        "m",
+                        description=None,
+                        version=None,
+                        platforms=(),
+                        tags=(),
+                    )
+                ),
+                SourceKind.GITHUB_DISCOVERY.value: source_state(
+                    observation(
+                        SourceKind.GITHUB_DISCOVERY,
+                        "d",
+                        platforms=("telegram",),
+                        tags=("GitHub",),
+                    )
+                ),
+            },
+            previous,
+        )
+        events = detect_changes(previous, current, detected_at=NOW)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(
+            events[0].changed_fields, ("description", "version", "platforms", "tags")
+        )
 
     def test_event_order_and_id_algorithm_are_frozen(self) -> None:
         old = PluginRecord(canonical_id="github:z/updated", name="updated", version="1")
@@ -558,18 +639,18 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             enabled_sources=set(), push_targets=[], max_items_per_push=10
         )
         self.assertEqual(report.targets_pending, 0)
-        self.assertEqual(report.targets_exhausted, 1)
-        self.assertEqual(store.state.last_run["targets_exhausted"], 1)
+        self.assertEqual(report.targets_exhausted, 0)
+        self.assertEqual(store.state.last_run["targets_exhausted"], 0)
 
     async def test_service_persists_endpoint_page_count(self) -> None:
-        item = observation(SourceKind.COLLECTION_ISSUE, "one")
+        item = observation(SourceKind.GITHUB_DISCOVERY, "one")
         store = FakeStore()
         service = MarketWatcherService(
             store=store,
             fetchers={
-                SourceKind.COLLECTION_ISSUE: FakeFetcher(
+                SourceKind.GITHUB_DISCOVERY: FakeFetcher(
                     fetch_result(
-                        SourceKind.COLLECTION_ISSUE,
+                        SourceKind.GITHUB_DISCOVERY,
                         item,
                         pages_fetched=2,
                     )
@@ -579,14 +660,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             clock=lambda: NOW,
         )
         await service.check(
-            enabled_sources={SourceKind.COLLECTION_ISSUE},
+            enabled_sources={SourceKind.GITHUB_DISCOVERY},
             push_targets=[],
             max_items_per_push=10,
         )
         snapshot = next(
             iter(
                 store.state.sources[
-                    SourceKind.COLLECTION_ISSUE.value
+                    SourceKind.GITHUB_DISCOVERY.value
                 ].snapshots.values()
             )
         )
@@ -633,12 +714,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         market = observation(SourceKind.MARKET, "m")
-        collection = observation(
-            SourceKind.COLLECTION_ISSUE,
-            "c",
-            canonical_id="github:example/collection_only",
-            name="collection_only",
-            repo_name="collection_only",
+        discovery = observation(
+            SourceKind.GITHUB_DISCOVERY,
+            "d",
+            canonical_id="github:example/discovery_only",
+            name="discovery_only",
+            repo_name="discovery_only",
         )
         state = WatcherState(
             sources={SourceKind.MARKET.value: source_state(market)},
@@ -650,25 +731,25 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             store=store,
             fetchers={
                 SourceKind.MARKET: FakeFetcher(failure),
-                SourceKind.COLLECTION_ISSUE: FakeFetcher(
-                    fetch_result(SourceKind.COLLECTION_ISSUE, collection)
+                SourceKind.GITHUB_DISCOVERY: FakeFetcher(
+                    fetch_result(SourceKind.GITHUB_DISCOVERY, discovery)
                 ),
             },
             notifier=FakeNotifier(),
             clock=lambda: NOW,
         )
         report = await service.check(
-            enabled_sources={SourceKind.MARKET, SourceKind.COLLECTION_ISSUE},
+            enabled_sources={SourceKind.MARKET, SourceKind.GITHUB_DISCOVERY},
             push_targets=["umo"],
             max_items_per_push=10,
         )
         self.assertEqual(report.discovered, 0)
         self.assertIn("m", store.state.sources[SourceKind.MARKET.value].observations)
-        self.assertIn("github:example/collection_only", store.state.plugins)
+        self.assertIn("github:example/discovery_only", store.state.plugins)
 
     async def test_new_source_baseline_can_update_existing_plugin(self) -> None:
         market = observation(SourceKind.MARKET, "m", description="old")
-        collection = observation(SourceKind.COLLECTION_ISSUE, "c", description="new")
+        discovery = observation(SourceKind.GITHUB_DISCOVERY, "d", description="new")
         old_source = source_state(market)
         state = WatcherState(
             sources={SourceKind.MARKET.value: old_source},
@@ -678,27 +759,25 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         service = MarketWatcherService(
             store=store,
             fetchers={
-                SourceKind.COLLECTION_ISSUE: FakeFetcher(
-                    fetch_result(SourceKind.COLLECTION_ISSUE, collection)
+                SourceKind.GITHUB_DISCOVERY: FakeFetcher(
+                    fetch_result(SourceKind.GITHUB_DISCOVERY, discovery)
                 )
             },
             notifier=FakeNotifier(),
             clock=lambda: NOW,
         )
         report = await service.check(
-            enabled_sources={SourceKind.COLLECTION_ISSUE},
+            enabled_sources={SourceKind.GITHUB_DISCOVERY},
             push_targets=["umo"],
             max_items_per_push=10,
         )
         self.assertEqual((report.discovered, report.updated), (0, 0))
 
         higher_priority = observation(SourceKind.MARKET, "m", description="changed")
-        collection_state = source_state(collection)
+        discovery_state = source_state(discovery)
         state = WatcherState(
-            sources={SourceKind.COLLECTION_ISSUE.value: collection_state},
-            plugins=merge_sources(
-                {SourceKind.COLLECTION_ISSUE.value: collection_state}
-            ),
+            sources={SourceKind.GITHUB_DISCOVERY.value: discovery_state},
+            plugins=merge_sources({SourceKind.GITHUB_DISCOVERY.value: discovery_state}),
         )
         store = FakeStore(state)
         service = MarketWatcherService(
@@ -771,7 +850,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_sources_fail_and_empty_targets_do_not_send(self) -> None:
         failures = {
             kind: FakeFetcher(FetchResult(kind, False, False, error_code="down"))
-            for kind in SourceKind
+            for kind in (SourceKind.MARKET, SourceKind.GITHUB_DISCOVERY)
         }
         notifier = FakeNotifier()
         service = MarketWatcherService(
@@ -781,12 +860,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             clock=lambda: NOW,
         )
         report = await service.check(
-            enabled_sources=set(SourceKind),
+            enabled_sources=set(failures),
             push_targets=[],
             max_items_per_push=10,
         )
         self.assertEqual(report.status, "failed")
-        self.assertEqual(report.sources_failed, 4)
+        self.assertEqual(report.sources_failed, 2)
         self.assertEqual(notifier.calls, [])
 
     async def test_load_or_first_save_failure_sends_nothing(self) -> None:
@@ -890,8 +969,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(report.invalid_targets, 3)
         self.assertEqual(report.target_error_code, "invalid_push_targets")
-        self.assertEqual(report.batches_created, 0)
-        self.assertEqual(set(store.state.outbox), {existing.batch_id})
+        self.assertEqual(report.batches_created, 1)
+        self.assertEqual(set(store.state.outbox), set())
 
     async def test_lock_busy_returns_immediately(self) -> None:
         service = MarketWatcherService(

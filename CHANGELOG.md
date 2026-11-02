@@ -6,9 +6,12 @@
 
 ## Unreleased
 
-### Added
+### Fixed
 
-- （预留）
+- #4：切换 AstrBot Cloud 为唯一市场事实来源，删除旧目录回退、旧发布流程采集及开关；保留可选 GitHub 独立发现，元数据补充不扩大市场清单。
+- schema v3 迁移：旧市场首次成功完整 Cloud 采集静默重建，失败不消耗迁移、重启幂等；含 pending/failed/exhausted 的旧生产批次隔离保留，不自动重放，不清空全部队列。管理员 migration / migration_release / migration_discard 仅处置隔离批次并保留 sent 状态。
+- outbox 压缩移除所有目标均为 sent/exhausted 的非隔离生产批次，保留待投递、诊断和隔离队列；状态诊断仅输出字节数、计数、来源完整性及安全错误码，不暴露目标或消息正文。
+- 升级前停用插件并备份 `state.json` 与 `.bak`，审查旧队列；升级后通过管理员命令明确处置隔离批次。`enabled=false` 不会停止已有队列投递。
 
 ---
 

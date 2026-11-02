@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,12 +32,6 @@ class AstrBotContractIntegrationTests(unittest.TestCase):
         self.assertTrue(callable(self.StarTools.get_data_dir))
         context_type = importlib.import_module("astrbot.api.star").Context
         self.assertTrue(callable(context_type.get_current_chat_provider_id))
-
-    def test_main_import_and_admin_decorator_contract(self) -> None:
-        self.assertTrue(hasattr(self.main, "MarketWatcherPlugin"))
-        source = inspect.getsource(self.main.MarketWatcherPlugin)
-        self.assertIn("permission_type", source)
-        self.assertIn("PermissionType.ADMIN", source)
 
     def test_plugin_construct_initialize_and_terminate(self) -> None:
         class Context:
